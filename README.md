@@ -8,8 +8,7 @@
 # 技术路线
 Python
 1.  B 站视频的音频版下载
-		you-get或者
-		billbill-helper
+		you-get
 2. 语音转文字
 		OpenAI Whisper small
 3. 监测剪切板自动触发
