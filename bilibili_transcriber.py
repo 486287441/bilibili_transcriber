@@ -26,11 +26,34 @@ DOWNLOAD_DIR = "downloads"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SPEED_FACTOR = 12.0     # 4060 运行 small 模型的预估倍速
 
+# --- FFmpeg 路径检测逻辑 ---
+def get_ffmpeg_path(tool_name):
+    """
+    优先检测脚本根目录，其次检测系统环境变量
+    """
+    # 1. 检测当前脚本所在目录 (Windows 环境下补充 .exe 扩展名)
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{tool_name}.exe")
+    if os.path.exists(local_path):
+        return local_path
+    
+    # 2. 检测系统环境变量
+    env_path = shutil.which(tool_name)
+    if env_path:
+        return env_path
+    
+    return None
+
+# 获取具体工具路径
+FFMPEG_EXE = get_ffmpeg_path("ffmpeg")
+FFPROBE_EXE = get_ffmpeg_path("ffprobe")
+
 def get_audio_duration(file_path):
     """使用 ffprobe 获取音频总秒数"""
+    if not FFPROBE_EXE:
+        return 0
     try:
         cmd = [
-            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+            FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration',
             '-of', 'default=noprint_wrappers=1:nokey=1', file_path
         ]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -49,6 +72,7 @@ def download_bilibili_audio(url):
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
+        'ffmpeg_location': FFMPEG_EXE, # 显式告知 yt-dlp ffmpeg 的位置
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -76,28 +100,23 @@ def transcribe_with_progress(audio_path, model):
         print(f"📊 视频总长: {mins}分{secs}秒")
         print(f"🕒 预估耗时: 约 {int(est_time)} 秒 (RTX 4060 加速中...)")
     
-    # 初始化进度条
     pbar = tqdm(total=int(duration), unit="s", desc="📝 语音转文字中", 
                 bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
 
-    # --- 进度条猴子补丁逻辑 ---
     original_format_timestamp = whisper.utils.format_timestamp
 
     def patched_format_timestamp(seconds: float, always_include_hours: bool = False, decimal_marker: str = '.'):
-        # 只要 whisper 调用此函数输出时间戳，我们就更新进度条位置
         if seconds > pbar.n:
             pbar.n = min(int(seconds), int(duration))
             pbar.refresh()
         return original_format_timestamp(seconds, always_include_hours, decimal_marker)
 
-    # 替换 whisper 内部函数
     whisper.utils.format_timestamp = patched_format_timestamp
     
     print("-" * 45)
     start_time = time.time()
     
     try:
-        # 执行转录 (verbose=False 避免干扰进度条)
         result = model.transcribe(
             audio_path, 
             language="zh", 
@@ -105,7 +124,6 @@ def transcribe_with_progress(audio_path, model):
             verbose=False 
         )
         
-        # 恢复原函数并关闭进度条
         whisper.utils.format_timestamp = original_format_timestamp
         pbar.n = int(duration)
         pbar.refresh()
@@ -124,18 +142,20 @@ def transcribe_with_progress(audio_path, model):
 
 def main():
     # 环境自检
-    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        print("❌ 错误: 未检测到 FFmpeg 环境，请先安装并配置 Path。")
+    if not FFMPEG_EXE or not FFPROBE_EXE:
+        print("❌ 错误: 未检测到 FFmpeg 或 ffprobe。")
+        print("   请确保 ffmpeg.exe 和 ffprobe.exe 在程序根目录，或已加入环境变量。")
         return
 
+    print(f"✅ 找到 FFmpeg: {FFMPEG_EXE}")
     print(f"🚀 运行设备: {DEVICE.upper()} ({torch.cuda.get_device_name(0) if DEVICE=='cuda' else 'CPU'})")
     print(f"⏳ 正在预加载 AI 模型 ({MODEL_SIZE})...")
     model = whisper.load_model(MODEL_SIZE, device=DEVICE)
 
     last_clip = ""
     print("\n" + "="*50)
-    print("  🎧 B站视频自动转文稿助手 - 已就绪")
-    print("  👉 复制B站链接，我将为你处理一切")
+    print("   🎧 B站视频自动转文稿助手 - 已就绪")
+    print("   👉 复制B站链接，我将为你处理一切")
     print("="*50 + "\n")
 
     try:
@@ -154,7 +174,6 @@ def main():
                     text = transcribe_with_progress(audio_file, model)
                     
                     if text:
-                        # 构造发送给豆包的 Prompt
                         full_prompt = (
                             "这是 B 站视频转文字的结构，请将可能错误的文字修正并且将格式整理成一篇文章的形式，"
                             "在文章开头给出文章的结构目录。\n\n"
