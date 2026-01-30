@@ -123,13 +123,13 @@ def main():
     if not FFMPEG_EXE:
         print("❌ 错误: 未检测到 FFmpeg。请将 ffmpeg.exe 放在脚本同级目录。"); return
 
-    print(f"🚀 运行设备: {DEVICE.upper()} ({torch.cuda.get_device_name(0) if DEVICE=='cuda' else 'CPU'})")
+    print(f" 运行设备: {DEVICE.upper()} ({torch.cuda.get_device_name(0) if DEVICE=='cuda' else 'CPU'})")
     
     # 初始化模型
     model = load_sensevoice_model()
 
     last_clip = ""
-    print("\n" + "="*50 + "\n   🎧视频转文字助手 - 已就绪\n   👉 复制B站链接，我将自动开始处理\n" + "="*50 + "\n")
+    print("\n" + "="*50 + "\n   视频转文字助手 - 已就绪\n   👉 复制B站链接，我将自动开始处理\n" + "="*50 + "\n")
 
     try:
         while True:
