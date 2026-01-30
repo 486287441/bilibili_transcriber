@@ -113,7 +113,7 @@ def main():
         print("❌ 错误: 未检测到 FFmpeg 或 ffprobe。"); return
 
     print(f"🚀 运行设备: {DEVICE.upper()} ({torch.cuda.get_device_name(0) if DEVICE=='cuda' else 'CPU'})")
-    print(f"⏳ 正在预加载 AI 模型 ({MODEL_SIZE})...")
+    print(f"⏳ 正在预加载 OpenAI Whisper ({MODEL_SIZE})...")
     model = whisper.load_model(MODEL_SIZE, device=DEVICE)
 
     last_clip = ""
