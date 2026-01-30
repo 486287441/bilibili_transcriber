@@ -129,7 +129,7 @@ def main():
     model = load_sensevoice_model()
 
     last_clip = ""
-    print("\n" + "="*50 + "\n   🎧 视频转文字助手 (SenseVoice版) - 已就绪\n   👉 复制B站链接，我将自动开始处理\n" + "="*50 + "\n")
+    print("\n" + "="*50 + "\n   🎧视频转文字助手 - 已就绪\n   👉 复制B站链接，我将自动开始处理\n" + "="*50 + "\n")
 
     try:
         while True:

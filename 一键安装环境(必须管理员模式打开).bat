@@ -1,9 +1,9 @@
 @echo off
 chcp 65001
-title B站转文稿助手 - SenseVoice 强化环境部署
+title B站转文稿助手
 
 echo ======================================================
-echo 🚀 正在为您配置 [SenseVoice 版] 运行环境...
+echo 🚀 正在为您配置运行环境...
 echo ======================================================
 
 :: 1. 检查 Python
@@ -26,11 +26,11 @@ pip install funasr modelscope yt-dlp pyperclip tqdm -i https://pypi.tuna.tsinghu
 :: 3. 智能检测 GPU
 nvidia-smi >nul 2>&1
 if %errorlevel% equ 0 (
-    echo ⚡ 检测到 NVIDIA 4060 系列显卡，安装 GPU 加速版 PyTorch...
+    echo ⚡ 检测到 NVIDIA系列显卡，安装 GPU 加速版 PyTorch...
     :: 注意：funasr 建议使用 cu118 或 cu121
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ) else (
-    echo 💻 未检测到独立显卡，安装 CPU 版...
+    echo 💻 未检测到NVIDIA系列显卡，安装 CPU 版...
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 )
 
