@@ -9,7 +9,7 @@ import pyperclip
 from tqdm import tqdm
 
 # ==========================================
-# 依赖环境检查
+# 依赖环境检查1
 # ==========================================
 try:
     from funasr import AutoModel
