@@ -1,0 +1,8 @@
+/ffmpeg.exe
+/ffprobe.exe
+/python-3.12.8-amd64.exe
+对话 html/
+prd-preview/
+prd-html/
+.env
+state/

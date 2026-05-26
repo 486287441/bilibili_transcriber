@@ -1,0 +1,92 @@
+"""Post-transcription publish pipeline: DeepSeek → Feishu, with Doubao fallback."""
+
+from __future__ import annotations
+
+import os
+import webbrowser
+from datetime import datetime
+from pathlib import Path
+
+import pyperclip
+
+from deepseek_client import DeepSeekError, polish_and_summarize
+from feishu_client import FeishuError, create_video_document
+from prompts import build_doubao_prompt
+
+DOUBAO_URL = "https://www.doubao.com/"
+_PROJECT_ROOT = Path(__file__).resolve().parent
+_LAST_TRANSCRIPT_PATH = _PROJECT_ROOT / "downloads" / "last_transcript.txt"
+
+
+def backup_transcript(raw_text: str) -> Path:
+    """Save latest raw transcript before cloud publish (M05)."""
+    _LAST_TRANSCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _LAST_TRANSCRIPT_PATH.write_text(raw_text.strip() + "\n", encoding="utf-8")
+    return _LAST_TRANSCRIPT_PATH
+
+
+def open_feishu_in_browser(doc_url: str) -> None:
+    """Open the Feishu document in the system default browser (new tab when supported)."""
+    url = (doc_url or "").strip()
+    if not url:
+        return
+    print("[浏览器] 正在打开飞书文档...")
+    try:
+        webbrowser.open(url, new=2)
+    except Exception as exc:
+        print(f"[浏览器] 自动打开失败: {exc}\n   请手动访问: {url}")
+
+
+def postprocess_and_publish(
+    raw_text: str,
+    *,
+    title: str,
+    url: str,
+) -> str:
+    """Run DeepSeek polish/summary and create one Feishu doc per video. Returns doc URL."""
+    print("\n[DeepSeek] 润色与摘要中...")
+    body_md = polish_and_summarize(raw_text)
+
+    print("[飞书] 创建视频文档...")
+    doc_url = create_video_document(
+        title=title,
+        url=url,
+        transcribed_at=datetime.now(),
+        body_md=body_md,
+    )
+    return doc_url
+
+
+def fallback_to_doubao(raw_text: str) -> None:
+    """Copy Doubao prompt to clipboard and open Doubao (M05)."""
+    pyperclip.copy(build_doubao_prompt(raw_text))
+    print("[回退] 已进入豆包模式：转写原文已复制到剪贴板。")
+    print("[回退] 正在打开豆包...")
+    os.system(f"start {DOUBAO_URL}")
+
+
+def publish_or_fallback(
+    raw_text: str,
+    *,
+    title: str,
+    url: str,
+    open_browser: bool = True,
+) -> bool:
+    """Try cloud publish; on failure run Doubao fallback. Returns True if Feishu succeeded."""
+    backup_transcript(raw_text)
+
+    try:
+        doc_url = postprocess_and_publish(raw_text, title=title, url=url)
+    except (DeepSeekError, FeishuError) as exc:
+        print(f"\n[失败] 发布失败: {exc}")
+        fallback_to_doubao(raw_text)
+        return False
+    except Exception as exc:
+        print(f"\n[失败] 未预期错误: {exc}")
+        fallback_to_doubao(raw_text)
+        return False
+
+    print(f"\n[完成] 已写入飞书文档:\n   {doc_url}")
+    if open_browser:
+        open_feishu_in_browser(doc_url)
+    return True
