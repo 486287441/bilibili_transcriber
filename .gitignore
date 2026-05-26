@@ -1,8 +1,61 @@
+# --- 密钥与本地配置 ---
+.env
+.env.local
+*.cookies.txt
+www.bilibili.com_cookies.txt
+
+# --- 安装包与二进制（发行版 zip 单独分发）---
 /ffmpeg.exe
 /ffprobe.exe
-/python-3.12.8-amd64.exe
+/python-*.exe
+*.exe
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# --- 运行时产物 ---
+state/
+downloads/
+*.log
+*.wav
+*.mp3
+*.m4a
+*.webm
+*.part
+
+# --- PRD / 需求迭代（仅本地）---
+对话/
 对话 html/
 prd-preview/
 prd-html/
-.env
-state/
+plan/
+需求.md
+粗糙plan.md
+scripts/prd-serve.py
+启动PRD选题页.ps1
+
+# --- Cursor / Lark Agent 技能（非应用本体）---
+.agents/
+skills-lock.json
+
+# --- 操作系统 ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
