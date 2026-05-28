@@ -90,3 +90,30 @@ def publish_or_fallback(
     if open_browser:
         open_feishu_in_browser(doc_url)
     return True
+
+
+def publish_or_fallback_result(
+    raw_text: str,
+    *,
+    title: str,
+    url: str,
+    open_browser: bool = True,
+) -> tuple[bool, str | None]:
+    """Same flow as publish_or_fallback but also returns Feishu URL on success."""
+    backup_transcript(raw_text)
+
+    try:
+        doc_url = postprocess_and_publish(raw_text, title=title, url=url)
+    except (DeepSeekError, FeishuError) as exc:
+        print(f"\n[失败] 发布失败: {exc}")
+        fallback_to_doubao(raw_text)
+        return False, None
+    except Exception as exc:
+        print(f"\n[失败] 未预期错误: {exc}")
+        fallback_to_doubao(raw_text)
+        return False, None
+
+    print(f"\n[完成] 已写入飞书文档:\n   {doc_url}")
+    if open_browser:
+        open_feishu_in_browser(doc_url)
+    return True, doc_url

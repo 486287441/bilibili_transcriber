@@ -24,7 +24,7 @@ except ImportError as e:
     sys.exit(1)
 
 import config
-from pipeline import publish_or_fallback
+from pipeline import publish_or_fallback_result
 
 config.validate()
 
@@ -165,6 +165,33 @@ def _cleanup_audio(audio_file):
         pass
 
 
+def process_bilibili_url(url, model, *, open_browser=True):
+    """
+    Run existing download -> transcribe -> publish flow for one Bilibili URL.
+    Returns: (success, feishu_url, message)
+    """
+    audio_file, meta = download_bilibili_audio(url)
+    if not (audio_file and os.path.exists(audio_file) and meta):
+        return False, None, "下载音频失败"
+
+    try:
+        text = transcribe_offline(audio_file, model)
+        if not text:
+            return False, None, "转写失败"
+
+        ok, doc_url = publish_or_fallback_result(
+            text,
+            title=meta["title"],
+            url=meta["url"],
+            open_browser=open_browser,
+        )
+        if not ok:
+            return False, None, "发布失败（已执行回退流程）"
+        return True, doc_url, "完成"
+    finally:
+        _cleanup_audio(audio_file)
+
+
 # ==========================================
 # 主程序
 # ==========================================
@@ -202,20 +229,9 @@ def main():
             if clip_text != last_clip and is_bilibili_url(clip_text):
                 last_clip = clip_text
                 print(f"\n🔍 检测到新链接: {clip_text}")
-
-                audio_file, meta = download_bilibili_audio(clip_text)
-
-                if audio_file and os.path.exists(audio_file):
-                    text = transcribe_offline(audio_file, model)
-
-                    if text:
-                        publish_or_fallback(
-                            text,
-                            title=meta["title"],
-                            url=meta["url"],
-                            open_browser=True,
-                        )
-                    _cleanup_audio(audio_file)
+                ok, _, msg = process_bilibili_url(clip_text, model, open_browser=True)
+                if not ok:
+                    print(f"❌ {msg}")
 
                 print("\n👀 监听中，请复制下一个链接...")
 
