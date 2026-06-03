@@ -5,9 +5,9 @@ setlocal
 cd /d "%~dp0"
 
 echo ======================================================
-echo 启动单进程双入口模式：
-echo 1) 剪贴板监听 + Telegram 监听
-echo 2) 单模型实例 + 串行任务队列
+echo 启动单进程双入口模式
+echo  入口一 剪贴板与 Telegram 监听
+echo  入口二 单模型实例与串行任务队列
 echo ======================================================
 echo.
 
@@ -20,3 +20,11 @@ echo.
 echo 正在当前窗口启动统一服务...
 echo.
 python dual_entry_service.py
+set EXIT_CODE=%ERRORLEVEL%
+if not "%EXIT_CODE%"=="0" (
+  echo.
+  echo [错误] 服务异常退出，错误码: %EXIT_CODE%
+  echo 常见原因: sentencepiece 版本不兼容，请执行 pip install sentencepiece==0.2.0
+  pause
+  exit /b %EXIT_CODE%
+)

@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 import config
+from text_stats import format_article_stats_block
 
 _LARK_IDENTITY = "user"
 _MAX_WIKI_TITLE_LEN = 100
@@ -190,12 +191,14 @@ def create_video_document(
     display_title = (title or "").strip() or "未命名视频"
     doc = _create_wiki_doc_node(_wiki_doc_title(display_title, when))
 
+    body = body_md.strip()
     content = (
         f"# {display_title}\n\n"
         f"**标题：** {display_title}  \n"
         f"**链接：** {url.strip()}  \n"
         f"**转写时间：** {time_str}\n\n"
-        f"{body_md.strip()}\n"
+        f"{format_article_stats_block(body)}\n"
+        f"{body}\n"
     )
     _write_markdown(doc.document_id, content)
     return doc.url
