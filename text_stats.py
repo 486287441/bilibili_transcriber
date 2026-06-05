@@ -19,9 +19,12 @@ _PRO_INPUT_YUAN_PER_M = 3.0
 _FLASH_OUTPUT_YUAN_PER_M = 2.0
 _PRO_OUTPUT_YUAN_PER_M = 6.0
 
-# Claude 3 Opus 官方标价：美元 / 百万 tokens（Base Input / Output）。
-_CLAUDE_OPUS_INPUT_USD_PER_M = 15.0
-_CLAUDE_OPUS_OUTPUT_USD_PER_M = 75.0
+# Claude Opus 4.8：定价表 Base Input / Output（美元每百万 tokens），折算人民币用参考汇率。
+_USD_TO_CNY = 7.25
+_CLAUDE_OPUS_48_INPUT_USD_PER_M = 5.0  # Base Input Tokens
+_CLAUDE_OPUS_48_OUTPUT_USD_PER_M = 25.0  # Output Tokens
+_CLAUDE_OPUS_48_INPUT_YUAN_PER_M = _CLAUDE_OPUS_48_INPUT_USD_PER_M * _USD_TO_CNY
+_CLAUDE_OPUS_48_OUTPUT_YUAN_PER_M = _CLAUDE_OPUS_48_OUTPUT_USD_PER_M * _USD_TO_CNY
 
 # 简短回复：约为输入 5%，不少于 200、不超过 512 tokens。
 _BRIEF_REPLY_MIN_TOKENS = 200
@@ -83,16 +86,6 @@ def format_yuan(yuan: float) -> str:
     return f"约 {yuan:.4f} 元"
 
 
-def format_usd(usd: float) -> str:
-    if usd <= 0:
-        return "$0"
-    if usd >= 1:
-        return f"约 ${usd:.2f}"
-    if usd >= 0.01:
-        return f"约 ${usd:.3f}"
-    return f"约 ${usd:.4f}"
-
-
 def format_reading_duration(char_count: int) -> str:
     """Human-readable reading time from character count."""
     if char_count <= 0:
@@ -108,57 +101,75 @@ def format_reading_duration(char_count: int) -> str:
     return f"约 {minutes} 分钟"
 
 
+def _pricing_table_row(
+    model: str,
+    input_tokens: int,
+    reply_tokens: int,
+    *,
+    input_yuan_per_m: float,
+    output_yuan_per_m: float,
+) -> str:
+    input_cost = format_yuan(token_cost(input_tokens, input_yuan_per_m))
+    total_cost = format_yuan(
+        round_trip_cost(
+            input_tokens,
+            reply_tokens,
+            input_per_m=input_yuan_per_m,
+            output_per_m=output_yuan_per_m,
+        )
+    )
+    return f"| {model} | {input_cost} | {total_cost} |"
+
+
 def format_article_stats_block(text: str) -> str:
     """Markdown section appended to Feishu video documents."""
     chars = article_char_count(text)
     tokens = count_copy_tokens(text)
     reply_tokens = estimate_brief_reply_tokens(tokens)
     reading = format_reading_duration(chars)
-    flash_input = format_yuan(token_cost(tokens, _FLASH_INPUT_YUAN_PER_M))
-    pro_input = format_yuan(token_cost(tokens, _PRO_INPUT_YUAN_PER_M))
-    claude_input = format_usd(token_cost(tokens, _CLAUDE_OPUS_INPUT_USD_PER_M))
-    flash_total = format_yuan(
-        round_trip_cost(
+    rows = [
+        _pricing_table_row(
+            "deepseek-v4-flash",
             tokens,
             reply_tokens,
-            input_per_m=_FLASH_INPUT_YUAN_PER_M,
-            output_per_m=_FLASH_OUTPUT_YUAN_PER_M,
-        )
-    )
-    pro_total = format_yuan(
-        round_trip_cost(
+            input_yuan_per_m=_FLASH_INPUT_YUAN_PER_M,
+            output_yuan_per_m=_FLASH_OUTPUT_YUAN_PER_M,
+        ),
+        _pricing_table_row(
+            "deepseek-v4-pro",
             tokens,
             reply_tokens,
-            input_per_m=_PRO_INPUT_YUAN_PER_M,
-            output_per_m=_PRO_OUTPUT_YUAN_PER_M,
-        )
-    )
-    claude_total = format_usd(
-        round_trip_cost(
+            input_yuan_per_m=_PRO_INPUT_YUAN_PER_M,
+            output_yuan_per_m=_PRO_OUTPUT_YUAN_PER_M,
+        ),
+        _pricing_table_row(
+            "Claude Opus 4.8",
             tokens,
             reply_tokens,
-            input_per_m=_CLAUDE_OPUS_INPUT_USD_PER_M,
-            output_per_m=_CLAUDE_OPUS_OUTPUT_USD_PER_M,
-        )
+            input_yuan_per_m=_CLAUDE_OPUS_48_INPUT_YUAN_PER_M,
+            output_yuan_per_m=_CLAUDE_OPUS_48_OUTPUT_YUAN_PER_M,
+        ),
+    ]
+    table = "\n".join(
+        [
+            "| 模型 | 仅输入 | 输入 + 简短回复 |",
+            "| --- | --- | --- |",
+            *rows,
+        ]
     )
     return (
         "## 阅读与 Token 参考\n\n"
         f"- **全文字数：** {chars:,} 字（不计空白）\n"
         f"- **复制给 AI 约消耗：** {tokens:,} tokens"
         "（DeepSeek V3 词表计数；Claude 实际 token 数可能略有差异）\n"
-        f"- **预计 API 费用（仅输入，缓存未命中）：** "
-        f"deepseek-v4-flash {flash_input}；"
-        f"deepseek-v4-pro {pro_input}；"
-        f"Claude 3 Opus {claude_input}"
-        "（DeepSeek 输入 Flash 1 元 / Pro 3 元每百万 tokens；"
-        f"Claude 输入 ${_CLAUDE_OPUS_INPUT_USD_PER_M:g}/MTok）\n"
-        f"- **预计总价（输入 + 约 {reply_tokens:,} tokens 简短回复）：** "
-        f"deepseek-v4-flash {flash_total}；"
-        f"deepseek-v4-pro {pro_total}；"
-        f"Claude 3 Opus {claude_total}"
-        "（DeepSeek 输出 Flash 2 元 / Pro 6 元每百万 tokens；"
-        f"Claude 输出 ${_CLAUDE_OPUS_OUTPUT_USD_PER_M:g}/MTok；"
-        f"回复按输入 {_BRIEF_REPLY_INPUT_RATIO:.0%} 估算，"
-        f"{_BRIEF_REPLY_MIN_TOKENS}～{_BRIEF_REPLY_MAX_TOKENS} tokens）\n"
-        f"- **阅读耗时：** {reading}（按每分钟约 {_READING_CHARS_PER_MIN} 字估算）\n"
+        f"- **阅读耗时：** {reading}（按每分钟约 {_READING_CHARS_PER_MIN} 字估算）\n\n"
+        "### 预计 API 费用（人民币）\n\n"
+        f"{table}\n\n"
+        "说明：价格为估算值；DeepSeek 按人民币标价（输入按缓存未命中）。"
+        "Claude Opus 4.8 按定价表 Base Input / Output "
+        f"（${_CLAUDE_OPUS_48_INPUT_USD_PER_M:g} / ${_CLAUDE_OPUS_48_OUTPUT_USD_PER_M:g} "
+        f"每百万 tokens，汇率 {_USD_TO_CNY} 折算人民币）。"
+        f"「简短回复」按约 {reply_tokens:,} tokens 计"
+        f"（约为输入 {_BRIEF_REPLY_INPUT_RATIO:.0%}，"
+        f"{_BRIEF_REPLY_MIN_TOKENS}～{_BRIEF_REPLY_MAX_TOKENS} tokens）。\n"
     )
