@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
+COOKIES_DIR = _PROJECT_ROOT / "cookies"
 load_dotenv(_PROJECT_ROOT / ".env", encoding="utf-8")
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
@@ -17,6 +18,95 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro").strip()
 
 FEISHU_WIKI_SPACE_ID = os.getenv("FEISHU_WIKI_SPACE_ID", "").strip()
 FEISHU_WIKI_PARENT_NODE_TOKEN = os.getenv("FEISHU_WIKI_PARENT_NODE_TOKEN", "").strip()
+
+# yt-dlp Netscape cookie files (optional; only used when the file exists).
+# Export from browser extensions such as "Get cookies.txt LOCALLY".
+YTDLP_COOKIE_FILE_BILIBILI = os.getenv("YTDLP_COOKIE_FILE_BILIBILI", "").strip()
+YTDLP_COOKIE_FILE_YOUTUBE = os.getenv("YTDLP_COOKIE_FILE_YOUTUBE", "").strip()
+YTDLP_COOKIE_FILE_DOUYIN = os.getenv("YTDLP_COOKIE_FILE_DOUYIN", "").strip()
+YTDLP_COOKIE_FILE = os.getenv("YTDLP_COOKIE_FILE", "").strip()
+
+YTDLP_COOKIES_FROM_BROWSER = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
+YTDLP_COOKIES_FROM_BROWSER_BILIBILI = os.getenv(
+    "YTDLP_COOKIES_FROM_BROWSER_BILIBILI", ""
+).strip()
+YTDLP_COOKIES_FROM_BROWSER_YOUTUBE = os.getenv(
+    "YTDLP_COOKIES_FROM_BROWSER_YOUTUBE", ""
+).strip()
+YTDLP_COOKIES_FROM_BROWSER_DOUYIN = os.getenv(
+    "YTDLP_COOKIES_FROM_BROWSER_DOUYIN", ""
+).strip()
+
+
+def _parse_browser_spec(spec: str) -> tuple[str, ...] | None:
+    """Parse 'chrome' or 'chrome:Default' into yt-dlp cookiesfrombrowser tuple."""
+    text = (spec or "").strip()
+    if not text:
+        return None
+    browser, _, profile = text.partition(":")
+    browser = browser.strip().lower()
+    if not browser:
+        return None
+    profile = profile.strip()
+    return (browser, profile) if profile else (browser,)
+
+
+def resolve_cookies_from_browser(site: str) -> tuple[str, ...] | None:
+    """Return yt-dlp cookiesfrombrowser tuple for *site*, with global fallback."""
+    site_specs = {
+        "bilibili": YTDLP_COOKIES_FROM_BROWSER_BILIBILI,
+        "youtube": YTDLP_COOKIES_FROM_BROWSER_YOUTUBE,
+        "douyin": YTDLP_COOKIES_FROM_BROWSER_DOUYIN,
+    }
+    parsed = _parse_browser_spec(site_specs.get(site, ""))
+    if parsed:
+        return parsed
+    parsed = _parse_browser_spec(YTDLP_COOKIES_FROM_BROWSER)
+    if parsed:
+        return parsed
+    if site == "youtube":
+        return ("chrome",)
+    return None
+
+
+def has_ytdlp_auth(site: str) -> bool:
+    """True when a cookie file or cookies-from-browser source is configured."""
+    return bool(resolve_ytdlp_cookie_file(site) or resolve_cookies_from_browser(site))
+
+
+def resolve_ytdlp_cookie_file(site: str) -> str | None:
+    """Return an existing cookie file path for *site*, with generic fallback."""
+    site_defaults: dict[str, tuple[str, str]] = {
+        "bilibili": ("YTDLP_COOKIE_FILE_BILIBILI", "www.bilibili.com_cookies.txt"),
+        "youtube": ("YTDLP_COOKIE_FILE_YOUTUBE", "www.youtube.com_cookies.txt"),
+        "douyin": ("YTDLP_COOKIE_FILE_DOUYIN", "www.douyin.com_cookies.txt"),
+    }
+    env_name, default_name = site_defaults.get(site, ("", ""))
+    explicit = (os.getenv(env_name, "") if env_name else "").strip()
+    if not explicit and env_name:
+        explicit = globals().get(env_name, "") or ""
+
+    candidates: list[Path] = []
+    if explicit:
+        candidates.append(Path(explicit))
+    if default_name:
+        candidates.append(COOKIES_DIR / default_name)
+        candidates.append(_PROJECT_ROOT / default_name)
+    if YTDLP_COOKIE_FILE:
+        candidates.append(Path(YTDLP_COOKIE_FILE))
+        if not Path(YTDLP_COOKIE_FILE).is_absolute():
+            candidates.append(COOKIES_DIR / YTDLP_COOKIE_FILE)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        path = candidate if candidate.is_absolute() else _PROJECT_ROOT / candidate
+        path = path.resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.is_file():
+            return str(path)
+    return None
 
 _REQUIRED: tuple[tuple[str, str], ...] = (
     ("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY),

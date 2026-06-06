@@ -25,6 +25,7 @@ except ImportError as e:
 
 import config
 from pipeline import publish_or_fallback_result
+from video_urls import SUPPORTED_SITES_LABEL, detect_site, extract_video_url
 
 config.validate()
 
@@ -39,8 +40,17 @@ os.environ["MODELSCOPE_CACHE"] = MODEL_CACHE_DIR
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(_SCRIPT_DIR, "downloads")
-COOKIE_FILE = os.path.join(_SCRIPT_DIR, "www.bilibili.com_cookies.txt")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/147.0.0.0 Safari/537.36"
+)
+_SITE_REFERERS = {
+    "bilibili": "https://www.bilibili.com",
+    "douyin": "https://www.douyin.com",
+}
 
 # ==========================================
 # 工具函数
@@ -59,16 +69,15 @@ FFMPEG_EXE = get_ffmpeg_path("ffmpeg")
 FFPROBE_EXE = get_ffmpeg_path("ffprobe")
 
 
-def is_bilibili_url(text):
-    return re.search(r"bilibili\.com/video/[a-zA-Z0-9]+", text)
+def _resolve_node_js_runtime() -> dict | None:
+    """yt-dlp needs a JS runtime (Node 22+) to solve YouTube challenges."""
+    if shutil.which("node"):
+        return {"node": {}}
+    return None
 
 
-def download_bilibili_audio(url):
-    """Download audio; return (wav_path, {title, url}) or (None, None)."""
-    if not os.path.exists(DOWNLOAD_DIR):
-        os.makedirs(DOWNLOAD_DIR)
-    print(f"\n🎵 [下载] 正在通过 yt-dlp 提取音频...")
-    ydl_opts = {
+def _base_ydl_opts() -> dict:
+    return {
         "format": "bestaudio/best",
         "outtmpl": os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
         "ffmpeg_location": FFMPEG_EXE,
@@ -81,30 +90,232 @@ def download_bilibili_audio(url):
         ],
         "quiet": True,
         "no_warnings": True,
-        "cookiefile": COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
-        "http_headers": {
-            "Referer": "https://www.bilibili.com",
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/147.0.0.0 Safari/537.36"
-            ),
-        },
     }
-    if ydl_opts["cookiefile"] is None:
-        del ydl_opts["cookiefile"]
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            audio_path = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".wav"
-            meta = {
-                "title": (info.get("title") or "未命名视频").strip(),
-                "url": (info.get("webpage_url") or url).strip(),
-            }
-            return audio_path, meta
-    except Exception as e:
-        print(f"❌ 下载失败: {e}")
-        return None, None
+
+
+def _apply_ytdlp_auth(
+    opts: dict,
+    site: str,
+    *,
+    cookiesfrombrowser: tuple[str, ...] | None = None,
+    cookiefile: str | None = None,
+) -> dict:
+    """Attach cookiefile or cookiesfrombrowser for yt-dlp."""
+    out = dict(opts)
+    out.pop("cookiefile", None)
+    out.pop("cookiesfrombrowser", None)
+
+    if cookiesfrombrowser:
+        out["cookiesfrombrowser"] = cookiesfrombrowser
+        return out
+
+    if cookiefile:
+        out["cookiefile"] = cookiefile
+        return out
+
+    cookie_file = config.resolve_ytdlp_cookie_file(site)
+    browser = config.resolve_cookies_from_browser(site)
+
+    if cookie_file:
+        out["cookiefile"] = cookie_file
+        return out
+
+    if browser:
+        out["cookiesfrombrowser"] = browser
+    return out
+
+
+def _ydl_opts_for_site(
+    site: str,
+    *,
+    cookiesfrombrowser: tuple[str, ...] | None = None,
+    cookiefile: str | None = None,
+) -> dict:
+    """Build yt-dlp options; Bilibili keeps the original referer/cookie behavior."""
+    opts = _base_ydl_opts()
+    headers = {"User-Agent": _DEFAULT_USER_AGENT}
+    referer = _SITE_REFERERS.get(site)
+    if referer:
+        headers["Referer"] = referer
+    opts["http_headers"] = headers
+
+    if site == "youtube":
+        node_runtime = _resolve_node_js_runtime()
+        if node_runtime:
+            opts["js_runtimes"] = node_runtime
+        opts["format"] = "bestaudio/best/ba/b"
+
+    return _apply_ytdlp_auth(
+        opts,
+        site,
+        cookiesfrombrowser=cookiesfrombrowser,
+        cookiefile=cookiefile,
+    )
+
+
+def _youtube_browser_fallbacks() -> list[tuple[str, ...]]:
+    return [("chrome",), ("edge",), ("brave",), ("firefox",)]
+
+
+def _youtube_auth_attempts() -> list[tuple[str, dict]]:
+    """Build ordered YouTube auth attempts: Chrome browser first, then cookie files."""
+    attempts: list[tuple[str, dict]] = []
+    seen: set[tuple[str | None, tuple[str, ...] | None]] = set()
+
+    def _add(label: str, **kwargs) -> None:
+        opts = _ydl_opts_for_site("youtube", **kwargs)
+        key = (opts.get("cookiefile"), tuple(opts.get("cookiesfrombrowser") or ()))
+        if key in seen:
+            return
+        seen.add(key)
+        attempts.append((label, opts))
+
+    cookie_file = config.resolve_ytdlp_cookie_file("youtube")
+    if cookie_file:
+        _add(f"cookie 文件 ({cookie_file})", cookiefile=cookie_file)
+
+    configured = config.resolve_cookies_from_browser("youtube")
+    if configured:
+        _add(f"浏览器 Cookie ({':'.join(configured)})", cookiesfrombrowser=configured)
+
+    for browser in _youtube_browser_fallbacks():
+        _add(f"浏览器 Cookie ({':'.join(browser)})", cookiesfrombrowser=browser)
+
+    if not attempts:
+        attempts.append(("无 Cookie", _ydl_opts_for_site("youtube")))
+    return attempts
+
+
+def _describe_ytdlp_auth(ydl_opts: dict) -> str:
+    if ydl_opts.get("cookiefile"):
+        return f"cookie 文件 ({ydl_opts['cookiefile']})"
+    browser = ydl_opts.get("cookiesfrombrowser")
+    if browser:
+        return f"浏览器 Cookie ({':'.join(browser)})"
+    return "无 Cookie"
+
+
+def _run_ytdlp_download(url: str, ydl_opts: dict):
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        audio_path = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".wav"
+        meta = {
+            "title": (info.get("title") or "未命名视频").strip(),
+            "url": (info.get("webpage_url") or url).strip(),
+        }
+        return audio_path, meta
+
+
+def _youtube_format_error(error: Exception | None) -> bool:
+    if not error:
+        return False
+    msg = str(error).lower()
+    return "requested format is not available" in msg or "challenge solving failed" in msg
+
+
+def _youtube_browser_locked(error: Exception | None) -> bool:
+    if not error:
+        return False
+    msg = str(error).lower()
+    return "could not copy" in msg and "cookie" in msg
+
+
+def _youtube_stale_cookies(error: Exception | None) -> bool:
+    if not error:
+        return False
+    msg = str(error).lower()
+    return "no longer valid" in msg or "sign in to confirm" in msg
+
+
+def _print_cookie_hint(site: str, error: Exception | None = None) -> None:
+    if site == "youtube":
+        if _youtube_browser_locked(error):
+            print(
+                "💡 无法读取 Chrome Cookie：浏览器正在运行时会锁定数据库。\n"
+                "   请完全退出 Chrome（任务管理器确认无 chrome.exe），然后重新复制链接重试。"
+            )
+            return
+
+        if _youtube_format_error(error):
+            has_node = bool(shutil.which("node"))
+            print(
+                "💡 YouTube 音频格式获取失败（JS 挑战未通过）。请确认：\n"
+                f"   1. 已安装 Node.js 22+（当前: {'已检测到 node' if has_node else '未检测到 node'}）\n"
+                '   2. 在项目 venv 执行: .venv\\Scripts\\pip install -U "yt-dlp[default]"\n'
+                "   3. 完全退出 Chrome 后重试（优先从 Chrome 读取 Cookie）"
+            )
+            return
+
+        if _youtube_stale_cookies(error):
+            print(
+                "💡 YouTube Cookie 已过期。请任选其一：\n"
+                "   1. 完全退出 Chrome 后重试（程序会直接从 Chrome 读取最新 Cookie）\n"
+                "   2. 在 Chrome 打开 youtube.com 确认已登录，用插件重新导出 cookie 到\n"
+                "      cookies/www.youtube.com_cookies.txt"
+            )
+            return
+
+        print(
+            "💡 YouTube 下载失败。请确认：\n"
+            "   1. Chrome 已登录 youtube.com\n"
+            "   2. 处理链接前完全退出 Chrome\n"
+            "   3. .env 中设置 YTDLP_COOKIES_FROM_BROWSER_YOUTUBE=chrome"
+        )
+        return
+    if site == "douyin" and not config.has_ytdlp_auth(site):
+        print(
+            "💡 抖音链接通常需要登录 Cookie。"
+            "请在 cookies/ 目录放置 www.douyin.com_cookies.txt，"
+            "或在 .env 设置 YTDLP_COOKIE_FILE_DOUYIN / YTDLP_COOKIES_FROM_BROWSER_DOUYIN。"
+        )
+
+
+def download_bilibili_audio(url):
+    """Download Bilibili audio; return (wav_path, {title, url}) or (None, None)."""
+    return _download_video_audio(url, site="bilibili")
+
+
+def download_video_audio(url):
+    """Download audio from any supported site via yt-dlp."""
+    return _download_video_audio(url, site=detect_site(url))
+
+
+def _download_video_audio(url, *, site: str):
+    """Download audio; return (wav_path, {title, url}) or (None, None)."""
+    if not os.path.exists(DOWNLOAD_DIR):
+        os.makedirs(DOWNLOAD_DIR)
+    site_label = {
+        "bilibili": "B站",
+        "youtube": "YouTube",
+        "douyin": "抖音",
+    }.get(site, site)
+    print(f"\n🎵 [下载] 正在通过 yt-dlp 提取音频 ({site_label})...")
+
+    if site == "youtube":
+        labeled_attempts = _youtube_auth_attempts()
+    else:
+        labeled_attempts = [("默认", _ydl_opts_for_site(site))]
+
+    label, first_opts = labeled_attempts[0]
+    auth_desc = _describe_ytdlp_auth(first_opts)
+    if auth_desc != "无 Cookie":
+        print(f"🔐 认证方式: {auth_desc}")
+
+    last_error: Exception | None = None
+    for idx, (label, opts) in enumerate(labeled_attempts):
+        if idx > 0:
+            print(f"🔐 正在换用: {label}")
+        try:
+            return _run_ytdlp_download(url, opts)
+        except Exception as e:
+            last_error = e
+            if site == "youtube" and idx < len(labeled_attempts) - 1:
+                continue
+            break
+
+    print(f"❌ 下载失败: {last_error}")
+    _print_cookie_hint(site, last_error)
+    return None, None
 
 
 # ==========================================
@@ -165,12 +376,12 @@ def _cleanup_audio(audio_file):
         pass
 
 
-def process_bilibili_url(url, model, *, open_browser=True):
+def process_video_url(url, model, *, open_browser=True):
     """
-    Run existing download -> transcribe -> publish flow for one Bilibili URL.
+    Run download -> transcribe -> publish flow for one supported video URL.
     Returns: (success, feishu_url, message)
     """
-    audio_file, meta = download_bilibili_audio(url)
+    audio_file, meta = download_video_audio(url)
     if not (audio_file and os.path.exists(audio_file) and meta):
         return False, None, "下载音频失败"
 
@@ -190,6 +401,11 @@ def process_bilibili_url(url, model, *, open_browser=True):
         return True, doc_url, "完成"
     finally:
         _cleanup_audio(audio_file)
+
+
+def process_bilibili_url(url, model, *, open_browser=True):
+    """Backward-compatible alias for process_video_url."""
+    return process_video_url(url, model, open_browser=open_browser)
 
 
 # ==========================================
@@ -213,8 +429,8 @@ def main():
     print(
         "\n"
         + "=" * 50
-        + "\n   视频转文字助手 - 已就绪\n"
-        "   👉 复制 B 站链接 → 转写 → DeepSeek → 飞书\n"
+        + f"\n   视频转文字助手 - 已就绪\n"
+        f"   👉 复制视频链接（{SUPPORTED_SITES_LABEL}）→ 转写 → DeepSeek → 飞书\n"
         + "=" * 50
         + "\n"
     )
@@ -226,10 +442,11 @@ def main():
             except Exception:
                 clip_text = ""
 
-            if clip_text != last_clip and is_bilibili_url(clip_text):
+            video_url = extract_video_url(clip_text)
+            if clip_text != last_clip and video_url:
                 last_clip = clip_text
-                print(f"\n🔍 检测到新链接: {clip_text}")
-                ok, _, msg = process_bilibili_url(clip_text, model, open_browser=True)
+                print(f"\n🔍 检测到新链接 ({detect_site(video_url)}): {video_url}")
+                ok, _, msg = process_video_url(video_url, model, open_browser=True)
                 if not ok:
                     print(f"❌ {msg}")
 

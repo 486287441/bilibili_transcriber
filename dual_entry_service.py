@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -14,7 +13,8 @@ import httpx
 import pyperclip
 
 import config
-from bilibili_transcriber import load_sensevoice_model, process_bilibili_url
+from bilibili_transcriber import load_sensevoice_model, process_video_url
+from video_urls import SUPPORTED_SITES_LABEL, extract_video_url
 
 TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN", "") or "").strip()
 TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_CHAT_ID", "") or "").strip()
@@ -23,13 +23,6 @@ POLL_TIMEOUT_SECONDS = 50
 REQUEST_TIMEOUT_SECONDS = 65.0
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _QUEUE_LOG_PATH = _PROJECT_ROOT / "downloads" / "queue_events.log"
-
-_BILI_URL_RE = re.compile(
-    r"(https?://(?:www\.)?bilibili\.com/video/[a-zA-Z0-9]+[^\s]*)|"
-    r"(https?://b23\.tv/[a-zA-Z0-9]+[^\s]*)",
-    re.IGNORECASE,
-)
-
 
 @dataclass(slots=True)
 class TaskItem:
@@ -41,11 +34,6 @@ class TaskItem:
 task_queue: Queue[TaskItem] = Queue()
 processing_lock = threading.Lock()
 stop_event = threading.Event()
-
-
-def extract_bilibili_url(text: str) -> str | None:
-    match = _BILI_URL_RE.search((text or "").strip())
-    return match.group(0) if match else None
 
 
 def is_processing() -> bool:
@@ -122,9 +110,9 @@ def clipboard_listener() -> None:
 
         if clip_text != last_clip:
             last_clip = clip_text
-            bili_url = extract_bilibili_url(clip_text)
-            if bili_url:
-                task = TaskItem(source="clipboard", url=bili_url)
+            video_url = extract_video_url(clip_text)
+            if video_url:
+                task = TaskItem(source="clipboard", url=video_url)
                 queue_size = enqueue_task(task)
                 status = "当前在忙，已排队" if is_processing() else "已入队，准备处理"
                 print(f"📥 [Clipboard] {status} (队列长度: {queue_size})")
@@ -152,12 +140,15 @@ def telegram_listener() -> None:
                         continue
 
                     text = msg.get("text") or ""
-                    bili_url = extract_bilibili_url(text)
-                    if not bili_url:
-                        send_message(chat_id, "请发送一个 B 站视频链接。")
+                    video_url = extract_video_url(text)
+                    if not video_url:
+                        send_message(
+                            chat_id,
+                            f"请发送支持的视频链接（{SUPPORTED_SITES_LABEL} 等）。",
+                        )
                         continue
 
-                    task = TaskItem(source="telegram", url=bili_url, chat_id=int(chat_id))
+                    task = TaskItem(source="telegram", url=video_url, chat_id=int(chat_id))
                     queue_size = enqueue_task(task)
                     if is_processing():
                         send_message(
@@ -183,7 +174,11 @@ def worker(model) -> None:
             print(f"\n🚀 开始处理 [{task.source}] {task.url}")
             if task.source == "telegram" and task.chat_id is not None:
                 send_message(task.chat_id, "开始处理你的链接，请稍候...")
-            ok, doc_url, err = process_bilibili_url(task.url, model, open_browser=(task.source == "clipboard"))
+            ok, doc_url, err = process_video_url(
+                task.url,
+                model,
+                open_browser=(task.source == "clipboard"),
+            )
             if ok and doc_url:
                 print(f"✅ 处理完成: {doc_url}")
                 if task.source == "telegram" and task.chat_id is not None:

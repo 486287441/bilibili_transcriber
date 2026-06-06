@@ -19,7 +19,11 @@ echo.
 
 echo 正在当前窗口启动统一服务...
 echo.
-python dual_entry_service.py
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" dual_entry_service.py
+) else (
+  python dual_entry_service.py
+)
 set EXIT_CODE=%ERRORLEVEL%
 if not "%EXIT_CODE%"=="0" (
   echo.

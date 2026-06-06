@@ -1,7 +1,7 @@
 funasr
 modelscope
 sentencepiece==0.2.0
-yt-dlp
+yt-dlp[default]
 pyperclip
 tqdm
 openai

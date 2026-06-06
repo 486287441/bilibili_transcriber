@@ -3,6 +3,7 @@
 .env.local
 *.cookies.txt
 www.bilibili.com_cookies.txt
+/cookies/
 
 # --- 安装包与二进制（发行版 zip 单独分发）---
 /ffmpeg.exe

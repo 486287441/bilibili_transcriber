@@ -1,9 +1,9 @@
-# B站视频自动转文稿助手
+# 视频自动转文稿助手
 
-这是一个基于 **阿里 SenseVoiceSmall** 的全自动B站视频转文字工具。
+这是一个基于 **阿里 SenseVoiceSmall** 的全自动视频转文字工具，支持 **B站、YouTube、抖音** 等 yt-dlp 可识别的主流站点。
 
 ## 核心功能
-* **自动监听触发**：只需复制链接（如 `https://www.bilibili.com/video/BV...`），无需手动粘贴。
+* **自动监听触发**：复制视频链接即可触发（如 B站 `BV...`、YouTube、抖音短链），无需手动粘贴。
 * **无缝 AI 衔接**：自动合成结构化润色指令，一键跳转豆包 AI，粘贴即得docx或者pdf。
 
 ## 如何使用
@@ -15,7 +15,7 @@
 
 ### 第二步：复制链接
 
-前往浏览器复制 B 站地址，剩下的交给助手：
+前往浏览器复制视频地址（B站 / YouTube / 抖音），剩下的交给助手：
 1. **转录中**：命令行会显示转录进度（40分钟视频约 2-4 分钟转完）。
 2. **唤醒 AI**：完成后自动打开豆包官网，你只需 **Ctrl + V** 即可开始 AI 总结。
 
@@ -26,8 +26,32 @@
    - `TELEGRAM_CHAT_ID`（可选；填写后仅允许该会话触发）
 2. 启动 Telegram 入口：
    - `python telegram_bot.py`
-3. 给 Bot 发送包含 B 站链接的消息
+3. 给 Bot 发送包含视频链接的消息（B站 / YouTube / 抖音等）
 4. Bot 将复用现有转写与飞书发布流程，并回复飞书文档链接
+
+### 多站点 Cookie（可选）
+
+**YouTube** 需要 Cookie，且 yt-dlp 需通过 **Node.js 22+** 解 JS 挑战（安装 `yt-dlp[default]` 时会带上 `yt-dlp-ejs`）。请确认本机 `node --version` 可用。
+
+推荐在 `.env` 中设置（默认已按 Chrome 配置）：
+
+```env
+YTDLP_COOKIES_FROM_BROWSER_YOUTUBE=chrome
+```
+
+**重要**：读取 Chrome Cookie 前须**完全退出 Chrome**（任务管理器确认无 `chrome.exe`），否则会报 `Could not copy Chrome cookie database`。
+
+未配置时，程序会自动依次尝试 Chrome → Edge → Brave → Firefox，再回退到 `cookies/` 下的 cookie 文件。
+
+也可使用 Netscape 格式 cookie 文件（浏览器插件导出），统一放在项目 `cookies/` 目录：
+
+- `cookies/www.bilibili.com_cookies.txt`
+- `cookies/www.youtube.com_cookies.txt`
+- `cookies/www.douyin.com_cookies.txt`
+
+完整浏览器导出可保存为 `cookies/browser.cookies.txt` 作备份，程序按站点读取上述分站点文件。
+
+详见 `.env.example` 中的 `YTDLP_COOKIES_FROM_BROWSER_*` 与 `YTDLP_COOKIE_FILE_*`。
 
 ##  注意事项
 
