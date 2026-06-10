@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<!-- ==================================================================
+     LONG DOCUMENT TEMPLATE · parchment design system
+     多页 A4 白皮书/技术报告/年度总结
+     结构：封面 -> 目录 -> 执行摘要 -> 正文章节 -> 附录
+     ================================================================== -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>31省财政自给率：谁是优等生？</title>
+<meta name="author" content="马督工工作室 · 睡前消息">
+<meta name="description" content="2026年一季度全国省级财政自给率均低于100%，并非会计危机，而是分税制下事权与财权割裂的常态；本文梳理上海、天津与湘赣三组异常及转移支付破局思路。">
+<meta name="keywords" content="财政自给率,转移支付,分税制,睡前消息,都市圈">
+<meta name="generator" content="Kami">
+<style>
+    /* BEGIN KAMI-FONTS */
+  /* Kami CN print templates · copy into <style> (keep in sync via scripts/sync-cn-font-blocks.py)
+     Paths: ../fonts/ (repo build) · fonts/ (standalone export) · jsDelivr CDN
+     Latin → Charter/Georgia · CJK → 仓耳今楷 · code → JetBrains Mono */
+  @font-face {
+    font-family: "KamiLatin";
+    src: local("Charter"),
+       local("Charter Regular"),
+       local("Georgia"),
+       local("Palatino Linotype"),
+       local("Times New Roman");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+                   U+2000-206F, U+2070-2079, U+2080-2089, U+20AC, U+2122, U+2190-2193, U+2212;
+  }
+
+  @font-face {
+    font-family: "KamiLatin";
+    src: local("Charter Bold"),
+       local("Charter"),
+       local("Georgia Bold"),
+       local("Georgia");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+                   U+2000-206F, U+2070-2079, U+2080-2089, U+20AC, U+2122, U+2190-2193, U+2212;
+  }
+
+  @font-face {
+    font-family: "KamiSerif";
+    src: local("仓耳今楷02 W04"),
+       local("TsangerJinKai02"),
+       url("../fonts/TsangerJinKai02-W04.ttf") format("truetype"),
+       url("fonts/TsangerJinKai02-W04.ttf") format("truetype"),
+       url("https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/TsangerJinKai02-W04.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
+  }
+
+  @font-face {
+    font-family: "KamiSerif";
+    src: local("仓耳今楷02 W05"),
+       local("TsangerJinKai02"),
+       url("../fonts/TsangerJinKai02-W05.ttf") format("truetype"),
+       url("fonts/TsangerJinKai02-W05.ttf") format("truetype"),
+       url("https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/TsangerJinKai02-W05.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
+  }
+
+  @font-face {
+    font-family: "KamiMono";
+    src: local("JetBrains Mono"),
+       local("JetBrains Mono Regular"),
+       local("Consolas"),
+       local("Cascadia Mono"),
+       url("../fonts/JetBrainsMono.woff2") format("woff2"),
+       url("fonts/JetBrainsMono.woff2") format("woff2"),
+       url("https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/JetBrainsMono.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  @font-face {
+    font-family: "KamiMono";
+    src: local("JetBrains Mono Medium"),
+       local("JetBrains Mono"),
+       local("Consolas"),
+       url("../fonts/JetBrainsMono.woff2") format("woff2"),
+       url("fonts/JetBrainsMono.woff2") format("woff2"),
+       url("https://cdn.jsdelivr.net/gh/tw93/Kami@main/assets/fonts/JetBrainsMono.woff2") format("woff2");
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+  }
+/* END KAMI-FONTS */
+
+
+
+
+
+@page {
+    size: A4;
+    margin: 20mm 22mm 22mm 22mm;
+    background: #f5f4ed;
+
+    @top-right {
+      content: string(section-title);
+      font-family: var(--serif);
+      font-size: 8pt;
+      color: #6b6a64;
+    }
+
+    @bottom-center {
+      content: counter(page) "  ·  31省财政自给率";
+      font-family: var(--serif);
+      font-size: 9pt;
+      color: #6b6a64;
+    }
+  }
+
+  @page:first {
+    @top-right { content: ""; }
+    @bottom-center { content: ""; }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --parchment: #f5f4ed;
+    --ivory:     #faf9f5;
+    --near-black:#141413;
+    --dark-warm: #3d3d3a;
+    --olive:     #504e49;
+    --stone:     #6b6a64;
+    --brand:     #1B365D;
+    --border:    #e8e6dc;
+    --border-soft:#e5e3d8;
+    --tag-bg:    #E4ECF5;
+    --serif: "KamiLatin", "KamiSerif", Charter, "仓耳今楷02 W04", "TsangerJinKai02",
+             "Source Han Serif SC", "Noto Serif CJK SC", Georgia, "Songti SC", serif;
+    --sans: var(--serif);
+        --mono: "KamiMono", "JetBrains Mono", Consolas, "Cascadia Mono", "SF Mono", "Fira Code", monospace;
+
+    --rhythm-module:  14pt;
+    --rhythm-section: 18pt;
+  }
+
+  html, body { background: var(--parchment); }
+
+  @media screen {
+    body { max-width: 210mm; margin: 0 auto; padding: 20mm 22mm 22mm 22mm; }
+  }
+
+  body {
+    color: var(--near-black);
+    font-family: var(--serif);
+    font-size: 10.5pt;
+    line-height: 1.55;
+    letter-spacing: 0.3pt;
+    widows: 3;
+    orphans: 3;
+  }
+
+  .sans {
+    font-family: var(--sans);
+  }
+
+  /* ========== COVER ========== */
+  .cover {
+    min-height: 240mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 40mm 0 0 0;
+    break-after: page;
+  }
+  .cover-eyebrow {
+    font-family: var(--sans);
+    font-size: 10pt;
+    color: var(--brand);
+    letter-spacing: 1pt;
+    text-transform: uppercase;
+    margin-bottom: 18pt;
+  }
+  .cover-title {
+    font-size: 36pt;
+    font-weight: 500;
+    color: var(--near-black);
+    line-height: 1.15;
+    letter-spacing: 0.3pt;
+    margin-bottom: 16pt;
+  }
+  .cover-sub {
+    font-family: var(--sans);
+    font-size: 14pt;
+    color: var(--olive);
+    line-height: 1.5;
+    max-width: 85%;
+    margin-bottom: 30pt;
+  }
+  .cover-meta {
+    font-family: var(--sans);
+    font-size: 10pt;
+    color: var(--stone);
+    line-height: 1.5;
+  }
+  .cover-meta strong {
+    color: var(--dark-warm);
+    font-weight: 500;
+  }
+
+  /* ========== TOC（目录）========== */
+  .toc { break-after: page; }
+  .toc h2 {
+    font-size: 22pt;
+    font-weight: 500;
+    margin-bottom: var(--rhythm-module);
+    border-left: 2.5pt solid var(--brand);
+    border-radius: 1.5pt;
+    padding-left: 8pt;
+  }
+  .toc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 6pt 0;
+    border-bottom: 0.3pt dotted var(--border);
+    font-size: 11pt;
+  }
+  .toc-item:last-of-type { border-bottom: none; }
+  .toc-num {
+    color: var(--brand);
+    font-weight: 500;
+    min-width: 30pt;
+  }
+  .toc-title {
+    flex: 1;
+    color: var(--near-black);
+    padding-left: 6pt;
+  }
+  .toc-page {
+    color: var(--stone);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ========== HEADINGS ========== */
+  h1 {
+    font-size: 22pt;
+    font-weight: 500;
+    line-height: 1.2;
+    margin: 0 0 10pt 0;
+    border-left: 2.5pt solid var(--brand);
+    border-radius: 1.5pt;
+    padding-left: 8pt;
+    color: var(--near-black);
+    break-after: avoid;
+  }
+
+  h2 {
+    font-size: 16pt;
+    font-weight: 500;
+    line-height: 1.25;
+    margin: 24pt 0 8pt 0;
+    color: var(--near-black);
+    break-after: avoid;
+    string-set: section-title content();
+  }
+
+  h3 {
+    font-size: 13pt;
+    font-weight: 500;
+    line-height: 1.3;
+    margin: 18pt 0 6pt 0;
+    color: var(--dark-warm);
+    break-after: avoid;
+  }
+
+  .chapter-num {
+    font-family: var(--sans);
+    font-size: 10pt;
+    color: var(--brand);
+    letter-spacing: 1pt;
+    text-transform: uppercase;
+    margin-bottom: 6pt;
+  }
+
+  /* ========== PARAGRAPHS ========== */
+  p {
+    margin: 0 0 10pt 0;
+    line-height: 1.55;
+    color: var(--near-black);
+    widows: 2;
+    orphans: 2;
+  }
+
+  .lead {
+    font-size: 12pt;
+    line-height: 1.55;
+    color: var(--dark-warm);
+    margin-bottom: var(--rhythm-module);
+  }
+
+  .hl { color: var(--brand); font-weight: 500; }
+  strong { font-weight: 500; }
+
+  /* ========== LISTS ========== */
+  ul, ol {
+    margin: 6pt 0 10pt 0;
+    padding-left: 20pt;
+    line-height: 1.55;
+  }
+  ul li::marker { color: var(--brand); }
+  ol li::marker { color: var(--brand); font-weight: 500; }
+
+  /* ========== QUOTE ========== */
+  blockquote, .quote {
+    border-left: 2pt solid var(--brand);
+    margin: 12pt 0;
+    padding: 4pt 0 4pt 16pt;
+    color: var(--olive);
+    line-height: 1.55;
+    break-inside: avoid;
+  }
+  blockquote .cite, .quote .cite {
+    display: block;
+    font-size: 9pt;
+    color: var(--stone);
+    margin-top: 4pt;
+  }
+
+  /* BEGIN KAMI-CODE */
+  code {
+    font-family: var(--mono), var(--serif), monospace;
+    font-size: 9pt;
+    background: var(--ivory);
+    padding: 1pt 4pt;
+    border-radius: 2pt;
+    color: var(--dark-warm);
+    font-variant-ligatures: none;
+  }
+  pre {
+    font-family: var(--mono), var(--serif), monospace;
+    font-size: 9pt;
+    line-height: 1.5;
+    background: var(--ivory);
+    border-radius: 4pt;
+    padding: 10pt 14pt;
+    margin: 10pt 0;
+    white-space: pre-wrap;
+    color: var(--near-black);
+    break-inside: avoid;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+    font-size: inherit;
+  }
+  /* END KAMI-CODE */
+
+/* ========== TABLE (kami-table) ========== */
+  table, .kami-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9.5pt;
+    margin: 12pt 0;
+    break-inside: avoid;
+  }
+  table th, .kami-table th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--dark-warm);
+    padding: 6pt 8pt;
+    border-bottom: 1pt solid var(--border);
+    background: transparent;
+  }
+  table td, .kami-table td {
+    padding: 5pt 8pt;
+    border-bottom: 0.3pt solid var(--border-soft);
+    vertical-align: top;
+  }
+  table.compact th, .kami-table.compact th { padding: 3pt 6pt; font-size: 8pt; }
+  table.compact td, .kami-table.compact td { padding: 2pt 6pt; font-size: 8pt; line-height: 1.4; }
+  table.financial td:not(:first-child), .kami-table.financial td:not(:first-child) {
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  table.financial th:not(:first-child), .kami-table.financial th:not(:first-child) { text-align: right; }
+  table.striped tbody tr:nth-child(even) td, .kami-table.striped tbody tr:nth-child(even) td {
+    background: var(--ivory);
+  }
+  table .total td, .kami-table .total td {
+    font-weight: 500; border-top: 1pt solid var(--brand); border-bottom: none; color: var(--near-black);
+  }
+
+  /* ========== CALLOUT ========== */
+  .callout {
+    background: var(--ivory);
+    border-left: 2pt solid var(--brand);
+    padding: 10pt 14pt;
+    border-radius: 3pt;
+    margin: 12pt 0;
+    line-height: 1.55;
+    break-inside: avoid;
+  }
+  .callout blockquote,
+  .callout .quote {
+    border-left: none;
+    padding-left: 0;
+    margin: 6pt 0;
+    color: var(--olive);
+  }
+  .callout blockquote:first-child,
+  .callout .quote:first-child { margin-top: 0; }
+  .callout blockquote:last-child,
+  .callout .quote:last-child  { margin-bottom: 0; }
+
+  .takeaway {
+    background: var(--ivory);
+    border-radius: 4pt;
+    padding: 10pt 14pt;
+    margin: 14pt 0;
+    break-inside: avoid;
+  }
+  .takeaway-label {
+    font-family: var(--sans);
+    font-size: 9pt;
+    color: var(--brand);
+    letter-spacing: 0.5pt;
+    text-transform: uppercase;
+    margin-bottom: 4pt;
+  }
+
+  /* ========== TAG ========== */
+  .tag {
+    display: inline-block;
+    background: var(--tag-bg);
+    color: var(--brand);
+    font-family: var(--sans);
+    font-size: 9pt;
+    font-weight: 500;
+    padding: 1pt 6pt;
+    border-radius: 3pt;
+    margin-right: 4pt;
+  }
+
+  /* ========== FIGURE ========== */
+  figure {
+    margin: 14pt 0;
+    break-inside: avoid;
+  }
+  figure img {
+    max-width: 100%;
+    border-radius: 4pt;
+  }
+  figcaption {
+    font-family: var(--sans);
+    font-size: 9pt;
+    color: var(--stone);
+    margin-top: 6pt;
+    text-align: center;
+  }
+
+  /* ========== EXECUTIVE SUMMARY ========== */
+  .exec-summary {
+    background: var(--ivory);
+    border-left: 1.4pt solid var(--brand);
+    border-radius: 6pt;
+    padding: 16pt 20pt;
+    margin: 14pt 0;
+    break-inside: avoid;
+  }
+  .exec-summary h2 {
+    margin-top: 0;
+    font-size: 13pt;
+  }
+
+  /* ========== CHAPTER BREAK ========== */
+  .chapter { break-before: page; }
+</style>
+</head>
+<body>
+
+<!-- ═════════════ COVER ═════════════ -->
+<section class="cover">
+  <div>
+    <div class="cover-eyebrow">财经时评 · 长文精读</div>
+    <div class="cover-title">31省财政自给率<br>谁是优等生？</div>
+    <div class="cover-sub">基于《睡前消息》第1061期转写整理：2026年一季度省级财政数据、分税制逻辑与都市圈分化</div>
+  </div>
+  <div class="cover-meta">
+    <strong>马督工工作室 · 睡前消息</strong><br>
+    精读版 V1.0  ·  2026.06.04<br>
+    来源视频：BV1osVr65EVD · 转写 2026.06.03
+  </div>
+</section>
+
+<!-- ═════════════ 目录 ═════════════ -->
+<section class="toc">
+  <h2>目录</h2>
+  <div class="toc-item">
+    <span class="toc-num">01</span>
+    <span class="toc-title">执行摘要</span>
+    <span class="toc-page">03</span>
+  </div>
+  <div class="toc-item">
+    <span class="toc-num">02</span>
+    <span class="toc-title">一季度数据与分税制根源</span>
+    <span class="toc-page">04</span>
+  </div>
+  <div class="toc-item">
+    <span class="toc-num">03</span>
+    <span class="toc-title">三组异常：上海、天津、湖南与江西</span>
+    <span class="toc-page">06</span>
+  </div>
+  <div class="toc-item">
+    <span class="toc-num">04</span>
+    <span class="toc-title">转移支付困境与破局方向</span>
+    <span class="toc-page">09</span>
+  </div>
+  <div class="toc-item">
+    <span class="toc-num">05</span>
+    <span class="toc-title">附录</span>
+    <span class="toc-page">11</span>
+  </div>
+</section>
+
+<!-- ═════════════ Chapter 01：执行摘要 ═════════════ -->
+<section class="chapter">
+  <div class="chapter-num">01 · Executive Summary</div>
+  <h1>执行摘要</h1>
+
+  <p class="lead">
+    2026年一季度，已公布数据的<span class="hl">29个省级单位财政自给率全部低于100%</span>，31省中无一例外。这并非突发性的会计危机，而是1994年分税制改革后<span class="hl">事权与财权长期割裂</span>的必然账面结果：地方缺乏自主税源，每年依赖中央约10.4万亿元转移支付才能运转。真正值得追问的，是表格里三组「反常」数据背后，都市圈选择与举债节奏如何改写各省的财政成色。
+  </p>
+
+  <h2>核心 Takeaways</h2>
+  <ul>
+    <li><strong>常态而非危机：</strong>2025年全年财政自给率最高的上海也仅约85%；一季度普遍更差是季节性与基建前置叠加，不必因「全军未破百」而过度恐慌。</li>
+    <li><strong>三组异常：</strong>上海自给率下滑因支出激增20%仍敢搞城建与产业投资；天津因不敢花钱支出压至718亿、自给率飙至89%；江西以41.46%反超人均GDP更高的湖南36.80%，折射融入长三角与「长株潭」受挫的分野。</li>
+    <li><strong>体制矛盾：</strong>约半数转移支付为专款专用，地方负责人事、中央握财权，公共服务标准难以拉平；节目主张扩大中央直管基本公共服务、弱化「给钱办事」模式。</li>
+  </ul>
+
+  <div class="takeaway">
+    <div class="takeaway-label">本文档回答的问题</div>
+    <ul>
+      <li>为什么31省「全军」财政自给率低于100%，算不算严重？</li>
+      <li>上海、天津、湖南与江西的数据反差，各自说明了什么发展逻辑？</li>
+      <li>10万亿级转移支付为何难以实现国民待遇均等化，节目提出的破局是什么？</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═════════════ Chapter 02：数据与制度 ═════════════ -->
+<section class="chapter">
+  <div class="chapter-num">02 · Data &amp; Institutions</div>
+  <h1>一季度数据与分税制根源</h1>
+
+  <p class="lead">
+    本章说明「31省无一自给率破百」究竟意味着什么，以及这一数字在现行税制下为何几乎是结构性的常态。
+  </p>
+
+  <h2>一季度全景</h2>
+  <p>据媒体统计，2026年一季度已公布收支数据的<span class="hl">29个省区市</span>中，没有任何一个省级单位的一般公共预算财政自给率达到100%。尚未公布数据的为新疆与青海：青海2025年全年自给率约16%（全国倒数第二），新疆约40%（第18位），均不可能在一个季度内逆转至盈余。因此可以认定，本轮统计周期内<span class="hl">全部31个省级单位一季度自给率均低于100%</span>。</p>
+  <p>需补充的是，新疆公布的40%自给率并不完全反映真实财力：除常规转移支付外，当地还接受大量点对点扶贫及未计入一般财政账的隐性援助，其实际自给水平更接近黑龙江、吉林所在的<span class="hl">20%—30%</span>区间。</p>
+
+  <h2>分税制：财权上收、事权下沉</h2>
+  <p>31省集体「不及格」在会计上并不等同于财政崩溃。按现行分配方案，中央拿走关税、车辆购置税、央企利润分成，并以消费税名义控制烟草红利；增值税、所得税中央分成一半或更多。地方能自主支配的税种，除土地相关税费外，主要是部分环境类收入。<span class="hl">地方收支天然难以闭合</span>，必须依赖中央转移。</p>
+  <p>财政自给率的常见算法为：一般公共预算收入 ÷ 一般公共预算支出。过去十余年地方还可依靠卖地补充政府性基金，但卖地收入不计入「一般财政收入」，故即便土地财政旺盛，自给率指标仍可能长期低于1。一季度数据往往比全年更难看：上年汇算清缴未必完成，重大基建却已先行支出，且一季度支出有时超过全年四分之一。</p>
+
+  <div class="callout">
+    2025年全年，自给率最高的上海也仅约85%。在全年无人破百的前提下，质疑一季度「全军低于100%」缺乏统计上的新鲜感——真正有价值的是各省之间的相对变动与结构性反常。
+  </div>
+
+  <h2>关键指标对照</h2>
+  <table class="financial striped">
+    <thead>
+      <tr>
+        <th>指标</th>
+        <th>数值 / 说明</th>
+        <th>政策含义</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>2025年上海全年自给率</td>
+        <td>约85%（全国最高）</td>
+        <td>仍依赖少量中央转移即可平衡</td>
+      </tr>
+      <tr>
+        <td>2025—2026年中央转移支付规模</td>
+        <td>约10.4万亿元/年</td>
+        <td>地方弥补缺口的主渠道</td>
+      </tr>
+      <tr>
+        <td>2025年中央财政本级收入</td>
+        <td>约9.4万亿元</td>
+        <td>低于地方本级收入之和，更低于转移支出</td>
+      </tr>
+      <tr>
+        <td>地方本级财政收入合计（不含转移）</td>
+        <td>约12.2万亿元</td>
+        <td>中央收入约为地方的77%</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <figure>
+    <svg viewBox="0 0 680 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="重点省市财政自给率对比">
+      <rect width="680" height="320" fill="#f5f4ed"/>
+      <text x="60" y="32" font-family="Georgia, serif" font-size="14" font-weight="500" fill="#141413">重点省市财政自给率对比（%）</text>
+      <line x1="60" y1="260" x2="620" y2="260" stroke="#e8e6dc" stroke-width="1"/>
+      <rect x="80" y="108" width="48" height="152" fill="#E4ECF5" stroke="#1B365D" stroke-width="1.2"/>
+      <rect x="160" y="140" width="48" height="120" fill="#1B365D"/>
+      <rect x="240" y="172" width="48" height="88" fill="#E4ECF5" stroke="#1B365D" stroke-width="1.2"/>
+      <rect x="320" y="124" width="48" height="136" fill="#1B365D"/>
+      <rect x="400" y="196" width="48" height="64" fill="#E4ECF5" stroke="#1B365D" stroke-width="1.2"/>
+      <rect x="480" y="208" width="48" height="52" fill="#E4ECF5" stroke="#1B365D" stroke-width="1.2"/>
+      <text x="104" y="100" text-anchor="middle" font-size="11" fill="#1B365D" font-weight="500">≈90</text>
+      <text x="184" y="132" text-anchor="middle" font-size="11" fill="#faf9f5" font-weight="500">89</text>
+      <text x="264" y="164" text-anchor="middle" font-size="11" fill="#1B365D">66</text>
+      <text x="344" y="116" text-anchor="middle" font-size="11" fill="#faf9f5" font-weight="500">89</text>
+      <text x="424" y="188" text-anchor="middle" font-size="11" fill="#1B365D">41</text>
+      <text x="504" y="200" text-anchor="middle" font-size="11" fill="#1B365D">37</text>
+      <text x="104" y="280" text-anchor="middle" font-size="9" fill="#504e49">上海Q1'25</text>
+      <text x="184" y="280" text-anchor="middle" font-size="9" fill="#504e49">上海Q1'26</text>
+      <text x="264" y="280" text-anchor="middle" font-size="9" fill="#504e49">天津全年'25</text>
+      <text x="344" y="280" text-anchor="middle" font-size="9" fill="#504e49">天津Q1'26</text>
+      <text x="424" y="280" text-anchor="middle" font-size="9" fill="#504e49">江西全年'25</text>
+      <text x="504" y="280" text-anchor="middle" font-size="9" fill="#504e49">湖南全年'25</text>
+      <text x="56" y="264" font-size="9" fill="#6b6a64">0</text>
+      <text x="56" y="204" font-size="9" fill="#6b6a64">50</text>
+      <text x="56" y="144" font-size="9" fill="#6b6a64">100</text>
+    </svg>
+    <figcaption>图1. 上海失去「一季度唯一破百」地位，主因支出增约20%；天津靠压缩支出拉高自给率；江西全年自给率反超湖南。</figcaption>
+  </figure>
+</section>
+
+<!-- ═════════════ Chapter 03：三组异常 ═════════════ -->
+<section class="chapter">
+  <div class="chapter-num">03 · Regional Cases</div>
+  <h1>三组异常：上海、天津、湖南与江西</h1>
+
+  <p class="lead">
+    在「全军未破百」的背景噪音下，上海、天津以及湖南—江西对照最值得细读：它们分别对应「敢花钱的都市圈中心」「不敢花钱的债务承压市」与「融入还是自建都市圈」两种路径。
+  </p>
+
+  <h2>上海：收钱稳、花钱猛</h2>
+  <p>2017年以来十年间，若不把深圳视为准省级单位，<span class="hl">仅上海能在部分年份的一季度做到自给率超过100%</span>，2020年疫情冲击年与2026年一季度是例外。上海一季度数据历来相对「好看」：全年基数高、大型项目不依赖年初突击拨款、民生支出常二季度才放量。</p>
+  <p>2026年一季度变化的关键不在收入侧：一般公共预算收入由去年同期的2552亿元增至2605亿元，增幅有限；支出由2408亿元增至2897亿元，<span class="hl">增幅约20%</span>，直接消灭全国唯一的一季度破百案例。同期全国地产投资普遍谨慎，上海却推进城区成片更新、郊区地铁环线及19号线穿越市区等基建，并在AI、生物科技领域加大政府投入——财政局数据显示，多数科目与上年持平，<span class="hl">科技支出同比增长17%</span>，为唯一两位数增长项。节目判断：上海是当前唯一仍敢于扩张大都市建设的省级单位。</p>
+
+  <h2>天津：石油红利与「不敢花钱」</h2>
+  <p>天津2025年全年自给率约66%，全国第六；2026年一季度却升至约89%，与上海接近，甚至高于北京。直观原因是<span class="hl">一般公共预算支出从季度均值约840亿压至718亿</span>。以经济总量对比：上海一季度GDP约5.67万亿元、天津约1.85万亿元；上海一季度财政支出约为天津的4倍多，在教育、社保等刚性支出占主导的直辖市结构下，3倍GDP对应4倍财政支出已属极高强度，天津压缩预算的决心可见一斑。</p>
+  <p>债务压力是底色：天津2024年底公布政府债务余额1.34万亿元，2025年底为1.5万亿元。隐性债务总量未公开，预算表述由「非标高息隐性债务全部出清」转为「多渠道稳妥化解存量、坚决遏制新增」。静海、东丽等地城投平台短期再融资与被执行案例，显示偿债仍高度依赖土地与国资腾挪——而2026年1—4月全市政府性基金收入101.5亿元、同比降24.1%，支出265.4亿元、同比增4.4%，土地拍卖多由本地国企接近底价接盘。</p>
+  <p>常被忽视的是资源账：2025年全国原油总产量约2.15亿吨，<span class="hl">天津以约4091万吨名列省级第一</span>（含渤海油田，总部与税务汇缴在天津）。按常住人口约1364万计，人均年产油约3吨，接近俄罗斯人均水平；直接税收与上下游产业可为地方带来约数百亿量级收入。然而石油红利难抵存量债务与土地财政退潮，「不敢花钱」是自保而非繁荣。</p>
+
+  <h2>湖南与江西：GDP与人均之外的「质量倒挂」</h2>
+  <p>人均GDP湖南约8.46万元、江西约8.00万元，湖南领先；但2025年全年财政自给率江西41.46%、湖南36.80%，<span class="hl">江西反超</span>。节目归因大致两半：江西锂矿与新能源汽车产业链抬高税收质量；江西地理上更易承接长三角辐射，湖南历史上更依赖京广线南向对接珠三角。</p>
+  <p>更深一层是都市圈战略：江西未将南昌、九江定位为全国性中心城市，而是务实融入长三角；湖南则推进长株潭都市圈，意图争夺中部核心乃至更大辐射范围，但城际铁路九郎山站停运前日客流不足10人，象征一体化推进受挫。2026年5月，在央企信达支持下，湖南拟建「债务清欠示范区」，首选株洲——与「借债造城、未能换来财政增量」的叙事相呼应。</p>
+
+  <div class="callout">
+    三组数据共享一条规律：未来区域财政健康度越来越取决于都市圈路径——做中心（上海）、理性融入（江西）、还是举债自建中心后遇挫（天津、长株潭）。
+  </div>
+
+  <table class="compact striped">
+    <thead>
+      <tr>
+        <th>地区</th>
+        <th>反常信号</th>
+        <th>机制解释</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>上海</td>
+        <td>失去一季度破百</td>
+        <td>城建与产业投资前置，支出+20%</td>
+      </tr>
+      <tr>
+        <td>天津</td>
+        <td>一季度自给率逼近上海</td>
+        <td>压减一般支出保运转，非收入跃升</td>
+      </tr>
+      <tr>
+        <td>江西 vs 湖南</td>
+        <td>自给率与人均GDP背离</td>
+        <td>长三角融入 vs 长株潭自建受挫</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <blockquote>
+    最好的结果是成为都市圈中心并在分税制下勉强自给；其次是理性融入既有都市圈；较差的是借债营造全国影响力中心失败后，债务与转移支付依赖双双上升。
+    <span class="cite"> — 《睡前消息》第1061期，2026年6月</span>
+  </blockquote>
+</section>
+
+<!-- ═════════════ Chapter 04：转移支付 ═════════════ -->
+<section class="chapter">
+  <div class="chapter-num">04 · Fiscal Federalism</div>
+  <h1>转移支付困境与破局方向</h1>
+
+  <p class="lead">
+    会计上的「全体未平衡」可能是中央预期的结果；管理学上的问题是：本应由中央出钱、定标准的事，长期由地方执行，监督成本与服务质量差异同步放大。
+  </p>
+
+  <h2>10万亿转移支付的三层结构</h2>
+  <p>地方政府弥补一般公共预算缺口，除借债、卖地、罚没外，几乎只能依靠中央转移。2025—2026年规模均在<span class="hl">约10.4万亿元</span>量级，可粗分为三类：</p>
+  <ol>
+    <li><strong>专项转移支付</strong>（约0.9—1万亿元）：传染病防控、污染治理、雄安新区等，专款专用，地方不得改用途。</li>
+    <li><strong>共同财政事权转移支付</strong>（约4万亿元）：义务教育、文物保护、基本养老金等，名义专款专用，但地方满足法定指标后，实践中可暂时挪用缓解其他压力。</li>
+    <li><strong>一般性转移支付</strong>（约5—6万亿元）：含均衡性支付、税收返还等，属地方可支配财力，可用于补缺口、还债或建设项目。</li>
+  </ol>
+  <p>前两类合计已占约一半。地方在这些领域<span class="hl">负责人事、中央握财权</span>，账面上自给率因此永远无法达到100%；花钱主体不同，最终公共服务质量必然千差万别——从各省红绿灯标准不一，到教育、养老金政策的地域差异，皆是同一逻辑的产物。</p>
+
+  <h2>政策新风：常住地公共服务</h2>
+  <p>2026年5月22日，国务院印发《关于推行常驻地提供基本公共服务的实施意见》，财政相关要点包括：按常住人口而非户籍分配转移支付；探索按保障标准、常住人口规模、支出责任分担比例分配共同事权资金；鼓励省级财政向人口流入地倾斜。节目解读为两层意图：户籍口径逐步作废；给钱要与责任挂钩、推动服务趋同。但作者对「北京、天津轻易放弃高考与中小学经费特权」持怀疑态度——只要人事权仍在地方，稳定逻辑就会塑造支出结构。</p>
+
+  <h2>节目主张：中央收钱、中央直管</h2>
+  <p>既然地方普遍依赖转移支付才能提供基本服务，不如<span class="hl">扩大中央财政权力</span>，减少「转移」中间环节：将列明的基本公共服务转为中央直属机构，例如义务教育编制划归教育部系统，地方不再对基本服务负全责；地方财力充裕时可另建青少年活动中心等「增量服务」，缺财力则不建，也不影响中央考核。目标是在多数内地省份实现较低水平上的财政平衡，同时让「国民待遇」从外交辞令变成可检验的国内标准。</p>
+
+  <h2>国际参照</h2>
+  <p>2025财年，美国联邦政府财政收入约5.3万亿美元，州与基层合计约3.96万亿美元，<span class="hl">中央约为地方的134%</span>。中国中央本级收入约9.4万亿元，地方本级合计约12.2万亿元（不含转移），中央仅为地方的77%；若计入卖地与化债相关财力，中央财政占比更低。与此同时，中央转移支付已稳定在10万亿以上，而中央「收来自花」的收入仍少于地方实际支出规模——建国77年后，基本公共服务仍与户口、属地深度绑定，与转移支付的使用方式密切相关。</p>
+
+  <h2>核心结论</h2>
+  <ol>
+    <li>31省一季度自给率均未破百，在分税制与季节因素下属常态，不宜单独解读为系统性财政危机。</li>
+    <li>区域分化比平均值更重要：都市圈中心敢投资、债务城市敢「不投资」、融入型省份可能以更低人均GDP实现更高自给率。</li>
+    <li>要落实常住地均等化服务，仅调转移支付公式不够；需直面人事权与财权分离，考虑中央直管基本公共服务。</li>
+  </ol>
+
+  <div class="takeaway">
+    <div class="takeaway-label">阅读提示</div>
+    本文档为视频转写精读，观点归属原节目主持团队；数据引用自节目所述公开统计与媒体报道，读者核对重大决策请以财政部、统计局及国务院原文为准。
+  </div>
+</section>
+
+<!-- ═════════════ Chapter 05：附录 ═════════════ -->
+<section class="chapter">
+  <div class="chapter-num">05 · Appendix</div>
+  <h1>附录</h1>
+
+  <h2>A. 来源与链接</h2>
+  <ul>
+    <li>视频标题：《【睡前消息1061】31省吃中央补贴 谁是优等生？》</li>
+    <li>B站链接：<a href="https://www.bilibili.com/video/BV1osVr65EVD/">https://www.bilibili.com/video/BV1osVr65EVD/</a></li>
+    <li>转写时间：2026-06-03 23:54:46</li>
+    <li>政策文件：国务院《关于推行常驻地提供基本公共服务的实施意见》（2026-05-22）</li>
+  </ul>
+
+  <h2>B. 术语表</h2>
+  <p><strong>财政自给率</strong>：一般公共预算收入与一般公共预算支出之比，常以百分比表示；100%表示本级收入可覆盖本级支出，低于100%表示需要转移支付、举债或其他渠道弥补。</p>
+  <p><strong>分税制</strong>：1994年改革后形成的中央与地方分税框架，将增值税、所得税等大税种设为共享或中央主导，塑造「中央拿大头、地方办实事」的财政格局。</p>
+  <p><strong>共同财政事权</strong>：中央与地方共同承担支出责任的事务，中央通过专项转移支付给予支持，地方负责具体执行。</p>
+  <p><strong>一般性转移支付</strong>：不限定具体项目的转移支付，地方可统筹用于弥补收支缺口。</p>
+  <p><strong>国民待遇</strong>：本文语境下指境内居民享受基本公共服务的同等程度；节目中批评其多用于对外经贸语境，对内公共服务差异仍大。</p>
+
+  <h2>C. 文档说明</h2>
+  <p>本页由 bilibili_transcriber 项目转写摘要经 Kami 长文模板排版生成，仅供个人学习存档；未经原节目授权，不得用于商业转载。排版：Kami 纸 · 暖色羊皮纸系。</p>
+</section>
+
+</body>
+</html>

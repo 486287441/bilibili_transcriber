@@ -37,6 +37,11 @@ YTDLP_COOKIES_FROM_BROWSER_DOUYIN = os.getenv(
     "YTDLP_COOKIES_FROM_BROWSER_DOUYIN", ""
 ).strip()
 
+YTDLP_SOCKET_TIMEOUT = int(os.getenv("YTDLP_SOCKET_TIMEOUT", "120") or "120")
+YTDLP_RETRIES = int(os.getenv("YTDLP_RETRIES", "10") or "10")
+YTDLP_FRAGMENT_RETRIES = int(os.getenv("YTDLP_FRAGMENT_RETRIES", "10") or "10")
+YTDLP_NETWORK_RETRIES = int(os.getenv("YTDLP_NETWORK_RETRIES", "3") or "3")
+
 
 def _parse_browser_spec(spec: str) -> tuple[str, ...] | None:
     """Parse 'chrome' or 'chrome:Default' into yt-dlp cookiesfrombrowser tuple."""
@@ -61,12 +66,7 @@ def resolve_cookies_from_browser(site: str) -> tuple[str, ...] | None:
     parsed = _parse_browser_spec(site_specs.get(site, ""))
     if parsed:
         return parsed
-    parsed = _parse_browser_spec(YTDLP_COOKIES_FROM_BROWSER)
-    if parsed:
-        return parsed
-    if site == "youtube":
-        return ("chrome",)
-    return None
+    return _parse_browser_spec(YTDLP_COOKIES_FROM_BROWSER)
 
 
 def has_ytdlp_auth(site: str) -> bool:

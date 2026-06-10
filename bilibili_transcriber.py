@@ -90,6 +90,11 @@ def _base_ydl_opts() -> dict:
         ],
         "quiet": True,
         "no_warnings": True,
+        "socket_timeout": config.YTDLP_SOCKET_TIMEOUT,
+        "retries": config.YTDLP_RETRIES,
+        "fragment_retries": config.YTDLP_FRAGMENT_RETRIES,
+        "file_access_retries": 5,
+        "continuedl": True,
     }
 
 
@@ -153,12 +158,8 @@ def _ydl_opts_for_site(
     )
 
 
-def _youtube_browser_fallbacks() -> list[tuple[str, ...]]:
-    return [("chrome",), ("edge",), ("brave",), ("firefox",)]
-
-
 def _youtube_auth_attempts() -> list[tuple[str, dict]]:
-    """Build ordered YouTube auth attempts: Chrome browser first, then cookie files."""
+    """Build YouTube auth attempts: cookie 文件优先，仅 .env 显式配置时才尝试浏览器。"""
     attempts: list[tuple[str, dict]] = []
     seen: set[tuple[str | None, tuple[str, ...] | None]] = set()
 
@@ -174,16 +175,57 @@ def _youtube_auth_attempts() -> list[tuple[str, dict]]:
     if cookie_file:
         _add(f"cookie 文件 ({cookie_file})", cookiefile=cookie_file)
 
-    configured = config.resolve_cookies_from_browser("youtube")
-    if configured:
-        _add(f"浏览器 Cookie ({':'.join(configured)})", cookiesfrombrowser=configured)
-
-    for browser in _youtube_browser_fallbacks():
-        _add(f"浏览器 Cookie ({':'.join(browser)})", cookiesfrombrowser=browser)
+    if config.YTDLP_COOKIES_FROM_BROWSER_YOUTUBE or config.YTDLP_COOKIES_FROM_BROWSER:
+        configured = config.resolve_cookies_from_browser("youtube")
+        if configured:
+            _add(f"浏览器 Cookie ({':'.join(configured)})", cookiesfrombrowser=configured)
 
     if not attempts:
         attempts.append(("无 Cookie", _ydl_opts_for_site("youtube")))
     return attempts
+
+
+def _is_network_error(error: Exception | None) -> bool:
+    if not error:
+        return False
+    msg = str(error).lower()
+    return any(
+        marker in msg
+        for marker in (
+            "read timed out",
+            "timed out",
+            "connectionpool",
+            "connection aborted",
+            "connection reset",
+            "urlopen error",
+            "network is unreachable",
+            "temporary failure",
+            "http error 503",
+            "http error 502",
+            "http error 429",
+        )
+    )
+
+
+def _is_auth_error(error: Exception | None, *, site: str) -> bool:
+    if not error or _is_network_error(error):
+        return False
+    msg = str(error).lower()
+    if site == "youtube":
+        return any(
+            marker in msg
+            for marker in (
+                "sign in to confirm",
+                "not a bot",
+                "no longer valid",
+                "requested format is not available",
+                "challenge solving failed",
+                "could not copy",
+                "dpapi",
+                "cookies",
+            )
+        )
+    return False
 
 
 def _describe_ytdlp_auth(ydl_opts: dict) -> str:
@@ -255,11 +297,17 @@ def _print_cookie_hint(site: str, error: Exception | None = None) -> None:
             )
             return
 
+        if _is_network_error(error):
+            print(
+                "💡 下载超时或网络不稳定（Cookie 可能仍然有效）。请：\n"
+                "   1. 直接重新复制链接再试一次\n"
+                "   2. 检查代理/VPN 是否稳定\n"
+                f"   3. 可在 .env 调大 YTDLP_SOCKET_TIMEOUT（当前 {config.YTDLP_SOCKET_TIMEOUT}s）"
+            )
+            return
+
         print(
-            "💡 YouTube 下载失败。请确认：\n"
-            "   1. Chrome 已登录 youtube.com\n"
-            "   2. 处理链接前完全退出 Chrome\n"
-            "   3. .env 中设置 YTDLP_COOKIES_FROM_BROWSER_YOUTUBE=chrome"
+            "💡 YouTube 下载失败。请确认 cookies/www.youtube.com_cookies.txt 为最新导出。"
         )
         return
     if site == "douyin" and not config.has_ytdlp_auth(site):
@@ -291,12 +339,11 @@ def _download_video_audio(url, *, site: str):
     }.get(site, site)
     print(f"\n🎵 [下载] 正在通过 yt-dlp 提取音频 ({site_label})...")
 
-    if site == "youtube":
-        labeled_attempts = _youtube_auth_attempts()
-    else:
-        labeled_attempts = [("默认", _ydl_opts_for_site(site))]
+    labeled_attempts = (
+        _youtube_auth_attempts() if site == "youtube" else [("默认", _ydl_opts_for_site(site))]
+    )
 
-    label, first_opts = labeled_attempts[0]
+    _, first_opts = labeled_attempts[0]
     auth_desc = _describe_ytdlp_auth(first_opts)
     if auth_desc != "无 Cookie":
         print(f"🔐 认证方式: {auth_desc}")
@@ -304,17 +351,36 @@ def _download_video_audio(url, *, site: str):
     last_error: Exception | None = None
     for idx, (label, opts) in enumerate(labeled_attempts):
         if idx > 0:
-            print(f"🔐 正在换用: {label}")
-        try:
-            return _run_ytdlp_download(url, opts)
-        except Exception as e:
-            last_error = e
-            if site == "youtube" and idx < len(labeled_attempts) - 1:
-                continue
+            print(f"🔐 认证失败，正在换用: {label}")
+
+        for net_try in range(config.YTDLP_NETWORK_RETRIES):
+            if net_try > 0:
+                print(
+                    f"⚠️ 网络超时，正在重试下载 "
+                    f"({net_try + 1}/{config.YTDLP_NETWORK_RETRIES})..."
+                )
+            try:
+                return _run_ytdlp_download(url, opts)
+            except Exception as e:
+                last_error = e
+                if _is_network_error(e) and net_try < config.YTDLP_NETWORK_RETRIES - 1:
+                    time.sleep(2 * (net_try + 1))
+                    continue
+                break
+
+        if site != "youtube" or not _is_auth_error(last_error, site=site):
+            break
+        if idx >= len(labeled_attempts) - 1:
             break
 
     print(f"❌ 下载失败: {last_error}")
-    _print_cookie_hint(site, last_error)
+    if _is_network_error(last_error):
+        print(
+            f"💡 这是网络/CDN 超时，不是 Cookie 失效。"
+            f"请直接重试同一链接（已自动重试 {config.YTDLP_NETWORK_RETRIES} 次）。"
+        )
+    else:
+        _print_cookie_hint(site, last_error)
     return None, None
 
 
