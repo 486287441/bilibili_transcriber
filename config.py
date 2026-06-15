@@ -42,6 +42,19 @@ YTDLP_RETRIES = int(os.getenv("YTDLP_RETRIES", "10") or "10")
 YTDLP_FRAGMENT_RETRIES = int(os.getenv("YTDLP_FRAGMENT_RETRIES", "10") or "10")
 YTDLP_NETWORK_RETRIES = int(os.getenv("YTDLP_NETWORK_RETRIES", "3") or "3")
 
+# YouTube: refresh cookies from running Chrome via CDP (no need to close the browser).
+# Modes: on_failure (default) | always | off
+YTDLP_CDP_REFRESH_YOUTUBE = os.getenv("YTDLP_CDP_REFRESH_YOUTUBE", "on_failure").strip().lower()
+
+
+def youtube_cdp_refresh_on_failure() -> bool:
+    mode = YTDLP_CDP_REFRESH_YOUTUBE
+    return mode not in ("0", "false", "off", "no", "disabled")
+
+
+def youtube_cdp_refresh_before_download() -> bool:
+    return YTDLP_CDP_REFRESH_YOUTUBE in ("always", "1", "true", "yes", "on")
+
 
 def _parse_browser_spec(spec: str) -> tuple[str, ...] | None:
     """Parse 'chrome' or 'chrome:Default' into yt-dlp cookiesfrombrowser tuple."""

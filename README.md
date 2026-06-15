@@ -33,15 +33,29 @@
 
 **YouTube** 需要 Cookie，且 yt-dlp 需通过 **Node.js 22+** 解 JS 挑战（安装 `yt-dlp[default]` 时会带上 `yt-dlp-ejs`）。请确认本机 `node --version` 可用。
 
-推荐在 `.env` 中设置（默认已按 Chrome 配置）：
+**推荐（下载时 Chrome 可保持打开）**：在 `.env` 中保留 cookie 文件路径，程序会在认证失败时自动通过 Chrome 调试接口（CDP）刷新 Cookie：
 
 ```env
-YTDLP_COOKIES_FROM_BROWSER_YOUTUBE=chrome
+YTDLP_COOKIE_FILE_YOUTUBE=cookies/www.youtube.com_cookies.txt
+# YTDLP_CDP_REFRESH_YOUTUBE=on_failure   # 默认；可选 always / off
 ```
 
-**重要**：读取 Chrome Cookie 前须**完全退出 Chrome**（任务管理器确认无 `chrome.exe`），否则会报 `Could not copy Chrome cookie database`。
+**一次性设置**：Chrome 需用调试端口启动（之后可一直开着，不必每次下载前关闭）：
 
-未配置时，程序会自动依次尝试 Chrome → Edge → Brave → Firefox，再回退到 `cookies/` 下的 cookie 文件。
+1. 完全退出 Chrome（任务管理器确认无 `chrome.exe`）
+2. 用以下命令或快捷方式重新打开 Chrome：
+   ```
+   "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+   ```
+3. 在 Chrome 中登录 [youtube.com](https://www.youtube.com)
+
+也可手动刷新 Cookie（Chrome 可开着）：
+
+```powershell
+.venv\Scripts\python export_chrome_cookies.py youtube
+```
+
+**不推荐**：`YTDLP_COOKIES_FROM_BROWSER_YOUTUBE=chrome` 需要完全退出 Chrome 才能读取 Cookie 数据库。
 
 也可使用 Netscape 格式 cookie 文件（浏览器插件导出），统一放在项目 `cookies/` 目录：
 
@@ -49,9 +63,7 @@ YTDLP_COOKIES_FROM_BROWSER_YOUTUBE=chrome
 - `cookies/www.youtube.com_cookies.txt`
 - `cookies/www.douyin.com_cookies.txt`
 
-完整浏览器导出可保存为 `cookies/browser.cookies.txt` 作备份，程序按站点读取上述分站点文件。
-
-详见 `.env.example` 中的 `YTDLP_COOKIES_FROM_BROWSER_*` 与 `YTDLP_COOKIE_FILE_*`。
+详见 `.env.example` 中的 `YTDLP_CDP_REFRESH_YOUTUBE` 与 `YTDLP_COOKIE_FILE_*`。
 
 ##  注意事项
 

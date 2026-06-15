@@ -70,7 +70,13 @@ def _ensure_chrome_debugging(url: str = "https://www.youtube.com/") -> None:
             return
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             continue
-    raise RuntimeError(f"Chrome 远程调试端口 {_DEBUG_PORT} 未就绪。")
+    raise RuntimeError(
+        f"Chrome 远程调试端口 {_DEBUG_PORT} 未就绪。"
+        "若 Chrome 已在运行，可能是用普通方式打开的（命令行参数会被忽略）。"
+        "请完全退出 Chrome 后，用带 --remote-debugging-port=9222 的方式重新启动，"
+        "之后浏览、下载可同时进行，无需每次关浏览器。"
+        f' 示例: "{chrome or "chrome.exe"}" --remote-debugging-port={_DEBUG_PORT}'
+    )
 
 
 def _pick_target(targets: list[dict]) -> dict:
@@ -154,6 +160,18 @@ def export_site_cookies(site: str, *, open_url: str | None = None) -> Path:
     matched = [c for c in cookies if _matches_site(c.get("domain") or "", site)]
     if not matched:
         raise RuntimeError(f"未从 Chrome 读取到 {site} 相关 Cookie。")
+
+    if site == "youtube":
+        yt_names = {
+            c.get("name")
+            for c in matched
+            if "youtube.com" in (c.get("domain") or "")
+        }
+        if "LOGIN_INFO" not in yt_names:
+            raise RuntimeError(
+                "Chrome 中未检测到 YouTube 登录态（缺少 LOGIN_INFO）。"
+                "请先在 Chrome 打开 youtube.com 并确认已登录。"
+            )
 
     filename = {
         "youtube": "www.youtube.com_cookies.txt",

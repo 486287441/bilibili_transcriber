@@ -9,3 +9,4 @@ tokenizers>=0.15.0
 python-dotenv
 httpx
 socksio
+websocket-client

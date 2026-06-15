@@ -158,6 +158,22 @@ def _ydl_opts_for_site(
     )
 
 
+def _refresh_youtube_cookies_via_cdp() -> str | None:
+    """Pull fresh YouTube cookies from running Chrome via CDP."""
+    if not config.youtube_cdp_refresh_on_failure() and not config.youtube_cdp_refresh_before_download():
+        return None
+    try:
+        from export_chrome_cookies import export_site_cookies
+
+        print("🔄 正在从 Chrome 刷新 YouTube Cookie（无需关闭浏览器）...")
+        path = export_site_cookies("youtube")
+        print(f"✅ Cookie 已更新: {path}")
+        return str(path)
+    except Exception as exc:
+        print(f"⚠️ Chrome CDP 刷新 Cookie 失败: {exc}")
+        return None
+
+
 def _youtube_auth_attempts() -> list[tuple[str, dict]]:
     """Build YouTube auth attempts: cookie 文件优先，仅 .env 显式配置时才尝试浏览器。"""
     attempts: list[tuple[str, dict]] = []
@@ -290,10 +306,10 @@ def _print_cookie_hint(site: str, error: Exception | None = None) -> None:
 
         if _youtube_stale_cookies(error):
             print(
-                "💡 YouTube Cookie 已过期。请任选其一：\n"
-                "   1. 完全退出 Chrome 后重试（程序会直接从 Chrome 读取最新 Cookie）\n"
-                "   2. 在 Chrome 打开 youtube.com 确认已登录，用插件重新导出 cookie 到\n"
-                "      cookies/www.youtube.com_cookies.txt"
+                "💡 YouTube Cookie 失效。程序会在失败时自动通过 Chrome 调试接口刷新 Cookie。\n"
+                "   前提：Chrome 须用 --remote-debugging-port=9222 启动（仅需设置一次）。\n"
+                "   若仍失败，请确认 Chrome 已登录 youtube.com，然后执行：\n"
+                "   .venv\\Scripts\\python export_chrome_cookies.py youtube"
             )
             return
 
@@ -339,6 +355,11 @@ def _download_video_audio(url, *, site: str):
     }.get(site, site)
     print(f"\n🎵 [下载] 正在通过 yt-dlp 提取音频 ({site_label})...")
 
+    if site == "youtube" and config.youtube_cdp_refresh_before_download():
+        refreshed = _refresh_youtube_cookies_via_cdp()
+        if refreshed:
+            print(f"🔐 已预刷新 Cookie: {refreshed}")
+
     labeled_attempts = (
         _youtube_auth_attempts() if site == "youtube" else [("默认", _ydl_opts_for_site(site))]
     )
@@ -349,7 +370,10 @@ def _download_video_audio(url, *, site: str):
         print(f"🔐 认证方式: {auth_desc}")
 
     last_error: Exception | None = None
-    for idx, (label, opts) in enumerate(labeled_attempts):
+    idx = 0
+    cdp_refresh_tried = False
+    while idx < len(labeled_attempts):
+        label, opts = labeled_attempts[idx]
         if idx > 0:
             print(f"🔐 认证失败，正在换用: {label}")
 
@@ -370,8 +394,25 @@ def _download_video_audio(url, *, site: str):
 
         if site != "youtube" or not _is_auth_error(last_error, site=site):
             break
+
+        if (
+            not cdp_refresh_tried
+            and config.youtube_cdp_refresh_on_failure()
+            and not config.youtube_cdp_refresh_before_download()
+        ):
+            cdp_refresh_tried = True
+            refreshed = _refresh_youtube_cookies_via_cdp()
+            if refreshed:
+                labeled_attempts.append(
+                    (
+                        f"CDP 刷新后的 cookie ({refreshed})",
+                        _ydl_opts_for_site("youtube", cookiefile=refreshed),
+                    )
+                )
+
         if idx >= len(labeled_attempts) - 1:
             break
+        idx += 1
 
     print(f"❌ 下载失败: {last_error}")
     if _is_network_error(last_error):
