@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 # Order matters: earlier patterns win when multiple could match.
 _VIDEO_URL_PATTERNS: tuple[str, ...] = (
@@ -60,6 +61,36 @@ def is_bilibili_url(text: str) -> bool:
     return url is not None and detect_site(url) == "bilibili"
 
 
-# Backward-compatible alias used by telegram_bot / dual_entry_service.
+# Backward-compatible alias used by legacy scripts.
 def extract_bilibili_url(text: str) -> str | None:
     return extract_video_url(text)
+
+
+def canonical_video_key(url: str) -> str:
+    """Stable identity for dedup across query strings and minor URL variants."""
+    text = (url or "").strip()
+    lowered = text.lower()
+
+    match = re.search(r"/video/(bv[a-z0-9]+)", lowered)
+    if match:
+        return f"bilibili:{match.group(1)}"
+
+    match = re.search(r"youtu\.be/([a-z0-9_-]+)", lowered)
+    if match:
+        return f"youtube:{match.group(1)}"
+
+    match = re.search(r"/shorts/([a-z0-9_-]+)", lowered)
+    if match:
+        return f"youtube:{match.group(1)}"
+
+    match = re.search(r"[?&]v=([a-z0-9_-]+)", lowered)
+    if "youtube.com" in lowered and match:
+        return f"youtube:{match.group(1)}"
+
+    match = re.search(r"/(?:video|note)/(\d+)", lowered)
+    if any(h in lowered for h in ("douyin.com", "iesdouyin.com")) and match:
+        return f"douyin:{match.group(1)}"
+
+    parsed = urlparse(text)
+    path = parsed.path.rstrip("/")
+    return f"{parsed.netloc.lower()}{path}".lower()

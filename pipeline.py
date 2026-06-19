@@ -42,8 +42,8 @@ def postprocess_and_publish(
     *,
     title: str,
     url: str,
-) -> str:
-    """Run DeepSeek polish/summary and create one Feishu doc per video. Returns doc URL."""
+) -> tuple[str, str]:
+    """Run DeepSeek polish/summary and create one Feishu doc per video."""
     print("\n[DeepSeek] 润色与摘要中...")
     body_md = polish_and_summarize(raw_text)
 
@@ -54,7 +54,7 @@ def postprocess_and_publish(
         transcribed_at=datetime.now(),
         body_md=body_md,
     )
-    return doc_url
+    return doc_url, body_md
 
 
 def fallback_to_doubao(raw_text: str) -> None:
@@ -62,7 +62,7 @@ def fallback_to_doubao(raw_text: str) -> None:
     pyperclip.copy(build_doubao_prompt(raw_text))
     print("[回退] 已进入豆包模式：转写原文已复制到剪贴板。")
     print("[回退] 正在打开豆包...")
-    os.system(f"start {DOUBAO_URL}")
+    webbrowser.open(DOUBAO_URL)
 
 
 def publish_or_fallback(
@@ -71,12 +71,13 @@ def publish_or_fallback(
     title: str,
     url: str,
     open_browser: bool = True,
+    task_id: str | None = None,
 ) -> bool:
     """Try cloud publish; on failure run Doubao fallback. Returns True if Feishu succeeded."""
     backup_transcript(raw_text)
 
     try:
-        doc_url = postprocess_and_publish(raw_text, title=title, url=url)
+        doc_url, body_md = postprocess_and_publish(raw_text, title=title, url=url)
     except (DeepSeekError, FeishuError) as exc:
         print(f"\n[失败] 发布失败: {exc}")
         fallback_to_doubao(raw_text)
@@ -85,6 +86,11 @@ def publish_or_fallback(
         print(f"\n[失败] 未预期错误: {exc}")
         fallback_to_doubao(raw_text)
         return False
+
+    if task_id:
+        from server.article_store import save_polished
+
+        save_polished(task_id, body_md)
 
     print(f"\n[完成] 已写入飞书文档:\n   {doc_url}")
     if open_browser:
@@ -98,12 +104,13 @@ def publish_or_fallback_result(
     title: str,
     url: str,
     open_browser: bool = True,
+    task_id: str | None = None,
 ) -> tuple[bool, str | None]:
     """Same flow as publish_or_fallback but also returns Feishu URL on success."""
     backup_transcript(raw_text)
 
     try:
-        doc_url = postprocess_and_publish(raw_text, title=title, url=url)
+        doc_url, body_md = postprocess_and_publish(raw_text, title=title, url=url)
     except (DeepSeekError, FeishuError) as exc:
         print(f"\n[失败] 发布失败: {exc}")
         fallback_to_doubao(raw_text)
@@ -112,6 +119,11 @@ def publish_or_fallback_result(
         print(f"\n[失败] 未预期错误: {exc}")
         fallback_to_doubao(raw_text)
         return False, None
+
+    if task_id:
+        from server.article_store import save_polished
+
+        save_polished(task_id, body_md)
 
     print(f"\n[完成] 已写入飞书文档:\n   {doc_url}")
     if open_browser:

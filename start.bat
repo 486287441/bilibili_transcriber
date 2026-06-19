@@ -1,39 +1,74 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 setlocal
 
 cd /d "%~dp0"
 
 echo ======================================================
-echo Starting single-process dual-entry service
-echo  Entry 1: Clipboard and Telegram listeners
-echo  Entry 2: One model instance with serialized task queue
+echo   Video Transcriber - Start Server (background)
+echo   Panel: http://127.0.0.1:8765/
+echo   Logs:  logs\
 echo ======================================================
 echo.
 
-if /i "%~1"=="--clean" (
-  echo [preflight] Cleaning old Python service instances...
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*telegram_bot.py*' -or $_.CommandLine -like '*bilibili_transcriber.py*' -or $_.CommandLine -like '*dual_entry_service.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
-  echo [preflight] Done.
-  echo.
-) else (
-  echo [preflight] Skipped old-instance cleanup. Use start.bat --clean when needed.
+if not exist ".venv\Scripts\python.exe" (
+  echo [ERROR] .venv not found. Run the install script first.
+  pause
+  exit /b 1
+)
+
+if not exist "web\dist\index.html" (
+  echo [WARN] web\dist missing. Run: cd web ^&^& npm install ^&^& npm run build
   echo.
 )
 
-echo Starting unified service in this window...
-echo.
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" dual_entry_service.py
-) else (
-  python dual_entry_service.py
+set "DO_RESTART=0"
+set "DO_CLEAN=0"
+if /i "%~1"=="--restart" set "DO_RESTART=1"
+if /i "%~2"=="--restart" set "DO_RESTART=1"
+if /i "%~1"=="--clean" set "DO_CLEAN=1"
+if /i "%~2"=="--clean" set "DO_CLEAN=1"
+
+if "%DO_RESTART%"=="1" (
+  echo [preflight] stopping existing server...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\stop_server.ps1"
+  if errorlevel 1 (
+    echo [ERROR] could not stop existing server.
+    pause
+    exit /b 1
+  )
+  echo.
 )
+
+if "%DO_CLEAN%"=="1" (
+  echo [preflight] cleaning legacy entry processes...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\clean_legacy.ps1"
+  echo [preflight] done.
+  echo.
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_preflight.ps1"
+set PREFLIGHT=%ERRORLEVEL%
+if "%PREFLIGHT%"=="2" (
+  echo        use stop.bat or start.bat --restart to restart
+  exit /b 0
+)
+if "%PREFLIGHT%"=="1" (
+  pause
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_server.ps1"
 set EXIT_CODE=%ERRORLEVEL%
+
 if not "%EXIT_CODE%"=="0" (
   echo.
-  echo [error] Service exited with code %EXIT_CODE%.
-  echo Common cause: incompatible sentencepiece version. Try: pip install sentencepiece==0.2.0
+  echo [ERROR] failed to start server, see logs\
   pause
   exit /b %EXIT_CODE%
 )
+
+echo.
+echo [done] running in background. Stop with stop.bat
+echo.
+endlocal

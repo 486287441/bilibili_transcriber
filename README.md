@@ -21,6 +21,8 @@
 
 ### Telegram Bot 触发（新增）
 
+> **迁移说明**：推荐使用常驻 FastAPI 服务 `python -m server`（M02+）。`dual_entry_service.py` 与 `telegram_bot.py` 为 legacy 入口，Telegram 完整迁入计划在 M04。
+
 1. 在 `.env` 中补充：
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`（可选；填写后仅允许该会话触发）
@@ -66,6 +68,23 @@ YTDLP_COOKIE_FILE_YOUTUBE=cookies/www.youtube.com_cookies.txt
 详见 `.env.example` 中的 `YTDLP_CDP_REFRESH_YOUTUBE` 与 `YTDLP_COOKIE_FILE_*`。
 
 ##  注意事项
+
+### FastAPI 常驻服务（推荐）
+
+```powershell
+# 1. 构建前端（首次或 web/ 代码变更后）
+cd web
+npm install
+npm run build
+cd ..
+
+# 2. 启动服务（API + Web UI 同端口）
+.venv\Scripts\python -m server
+```
+
+浏览器打开 `http://127.0.0.1:8765/` 即可使用控制面板。开发时可另开 `cd web && npm run dev`（Vite 代理到 8765）。`MODEL_LOAD_POLICY=lazy`（默认）时启动不加载模型，首次任务才占用 GPU 显存（SenseVoice 约 2–4 GB）。空闲 `model_idle_timeout_minutes`（默认 30）后自动卸载模型。
+
+**勿同时运行** `telegram_bot.py` 或 `dual_entry_service.py`（Telegram 轮询 409 冲突）。
 
 1. **显存保护**：处理超长视频时请关闭浏览器或 3D 游戏以预留显存。
 2. **首次运行**：第一次转录会从 ModelScope（国内镜像）下载约 2GB 的模型文件，国内网络通常 2 分钟内完成。

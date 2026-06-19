@@ -27,6 +27,8 @@ build/
 
 # --- 运行时产物 ---
 state/
+data/
+logs/
 downloads/
 *.log
 *.wav
@@ -35,7 +37,9 @@ downloads/
 *.webm
 *.part
 
-# --- PRD / 需求迭代（仅本地）---
+# --- 前端构建 ---
+web/node_modules/
+web/public/fonts/*.ttf
 对话/
 对话 html/
 prd-preview/

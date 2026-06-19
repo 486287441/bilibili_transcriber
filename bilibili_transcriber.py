@@ -4,6 +4,14 @@ import time
 
 if sys.platform == "win32":
     try:
+        from server.win_subprocess import patch_subprocess_no_window
+
+        patch_subprocess_no_window()
+    except ImportError:
+        pass
+
+if sys.platform == "win32":
+    try:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
@@ -142,6 +150,8 @@ def _ydl_opts_for_site(
     referer = _SITE_REFERERS.get(site)
     if referer:
         headers["Referer"] = referer
+        if site == "bilibili":
+            headers["Origin"] = referer
     opts["http_headers"] = headers
 
     if site == "youtube":
@@ -158,20 +168,14 @@ def _ydl_opts_for_site(
     )
 
 
-def _refresh_youtube_cookies_via_cdp() -> str | None:
-    """Pull fresh YouTube cookies from running Chrome via CDP."""
-    if not config.youtube_cdp_refresh_on_failure() and not config.youtube_cdp_refresh_before_download():
-        return None
-    try:
-        from export_chrome_cookies import export_site_cookies
-
-        print("🔄 正在从 Chrome 刷新 YouTube Cookie（无需关闭浏览器）...")
-        path = export_site_cookies("youtube")
-        print(f"✅ Cookie 已更新: {path}")
-        return str(path)
-    except Exception as exc:
-        print(f"⚠️ Chrome CDP 刷新 Cookie 失败: {exc}")
-        return None
+def format_ytdlp_error(error: Exception | None) -> str:
+    """Normalize yt-dlp exception text for logs and history."""
+    if not error:
+        return "下载失败（未知原因）"
+    msg = str(error).strip()
+    if msg.startswith("ERROR:"):
+        msg = msg[6:].strip()
+    return msg[:2000] if len(msg) > 2000 else msg
 
 
 def _youtube_auth_attempts() -> list[tuple[str, dict]]:
@@ -253,8 +257,13 @@ def _describe_ytdlp_auth(ydl_opts: dict) -> str:
     return "无 Cookie"
 
 
-def _run_ytdlp_download(url: str, ydl_opts: dict):
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+def _run_ytdlp_download(url: str, ydl_opts: dict, progress_hook=None):
+    opts = dict(ydl_opts)
+    if progress_hook:
+        hooks = list(opts.get("progress_hooks") or [])
+        hooks.append(progress_hook)
+        opts["progress_hooks"] = hooks
+    with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         audio_path = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".wav"
         meta = {
@@ -306,10 +315,9 @@ def _print_cookie_hint(site: str, error: Exception | None = None) -> None:
 
         if _youtube_stale_cookies(error):
             print(
-                "💡 YouTube Cookie 失效。程序会在失败时自动通过 Chrome 调试接口刷新 Cookie。\n"
-                "   前提：Chrome 须用 --remote-debugging-port=9222 启动（仅需设置一次）。\n"
-                "   若仍失败，请确认 Chrome 已登录 youtube.com，然后执行：\n"
-                "   .venv\\Scripts\\python export_chrome_cookies.py youtube"
+                "💡 YouTube Cookie 失效或未登录。请确认 Chrome 已登录 youtube.com，然后执行：\n"
+                "   .venv\\Scripts\\python export_chrome_cookies.py youtube\n"
+                "   或使用浏览器插件导出 cookies/www.youtube.com_cookies.txt"
             )
             return
 
@@ -335,17 +343,17 @@ def _print_cookie_hint(site: str, error: Exception | None = None) -> None:
 
 
 def download_bilibili_audio(url):
-    """Download Bilibili audio; return (wav_path, {title, url}) or (None, None)."""
+    """Download Bilibili audio; return (wav_path, meta, error)."""
     return _download_video_audio(url, site="bilibili")
 
 
-def download_video_audio(url):
+def download_video_audio(url, progress_hook=None):
     """Download audio from any supported site via yt-dlp."""
-    return _download_video_audio(url, site=detect_site(url))
+    return _download_video_audio(url, site=detect_site(url), progress_hook=progress_hook)
 
 
-def _download_video_audio(url, *, site: str):
-    """Download audio; return (wav_path, {title, url}) or (None, None)."""
+def _download_video_audio(url, *, site: str, progress_hook=None):
+    """Download audio; return (wav_path, meta, error_message)."""
     if not os.path.exists(DOWNLOAD_DIR):
         os.makedirs(DOWNLOAD_DIR)
     site_label = {
@@ -354,11 +362,6 @@ def _download_video_audio(url, *, site: str):
         "douyin": "抖音",
     }.get(site, site)
     print(f"\n🎵 [下载] 正在通过 yt-dlp 提取音频 ({site_label})...")
-
-    if site == "youtube" and config.youtube_cdp_refresh_before_download():
-        refreshed = _refresh_youtube_cookies_via_cdp()
-        if refreshed:
-            print(f"🔐 已预刷新 Cookie: {refreshed}")
 
     labeled_attempts = (
         _youtube_auth_attempts() if site == "youtube" else [("默认", _ydl_opts_for_site(site))]
@@ -371,7 +374,6 @@ def _download_video_audio(url, *, site: str):
 
     last_error: Exception | None = None
     idx = 0
-    cdp_refresh_tried = False
     while idx < len(labeled_attempts):
         label, opts = labeled_attempts[idx]
         if idx > 0:
@@ -384,7 +386,8 @@ def _download_video_audio(url, *, site: str):
                     f"({net_try + 1}/{config.YTDLP_NETWORK_RETRIES})..."
                 )
             try:
-                return _run_ytdlp_download(url, opts)
+                audio_path, meta = _run_ytdlp_download(url, opts, progress_hook)
+                return audio_path, meta, None
             except Exception as e:
                 last_error = e
                 if _is_network_error(e) and net_try < config.YTDLP_NETWORK_RETRIES - 1:
@@ -395,26 +398,12 @@ def _download_video_audio(url, *, site: str):
         if site != "youtube" or not _is_auth_error(last_error, site=site):
             break
 
-        if (
-            not cdp_refresh_tried
-            and config.youtube_cdp_refresh_on_failure()
-            and not config.youtube_cdp_refresh_before_download()
-        ):
-            cdp_refresh_tried = True
-            refreshed = _refresh_youtube_cookies_via_cdp()
-            if refreshed:
-                labeled_attempts.append(
-                    (
-                        f"CDP 刷新后的 cookie ({refreshed})",
-                        _ydl_opts_for_site("youtube", cookiefile=refreshed),
-                    )
-                )
-
         if idx >= len(labeled_attempts) - 1:
             break
         idx += 1
 
-    print(f"❌ 下载失败: {last_error}")
+    err_msg = format_ytdlp_error(last_error)
+    print(f"❌ 下载失败: {err_msg}")
     if _is_network_error(last_error):
         print(
             f"💡 这是网络/CDN 超时，不是 Cookie 失效。"
@@ -422,7 +411,7 @@ def _download_video_audio(url, *, site: str):
         )
     else:
         _print_cookie_hint(site, last_error)
-    return None, None
+    return None, None, err_msg
 
 
 # ==========================================
@@ -488,9 +477,9 @@ def process_video_url(url, model, *, open_browser=True):
     Run download -> transcribe -> publish flow for one supported video URL.
     Returns: (success, feishu_url, message)
     """
-    audio_file, meta = download_video_audio(url)
+    audio_file, meta, dl_error = download_video_audio(url)
     if not (audio_file and os.path.exists(audio_file) and meta):
-        return False, None, "下载音频失败"
+        return False, None, dl_error or "下载音频失败"
 
     try:
         text = transcribe_offline(audio_file, model)

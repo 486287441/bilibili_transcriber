@@ -9,8 +9,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = _PROJECT_ROOT
 COOKIES_DIR = _PROJECT_ROOT / "cookies"
 load_dotenv(_PROJECT_ROOT / ".env", encoding="utf-8")
+
+SERVER_HOST = os.getenv("SERVER_HOST", "127.0.0.1").strip() or "127.0.0.1"
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8765") or "8765")
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
@@ -41,19 +45,6 @@ YTDLP_SOCKET_TIMEOUT = int(os.getenv("YTDLP_SOCKET_TIMEOUT", "120") or "120")
 YTDLP_RETRIES = int(os.getenv("YTDLP_RETRIES", "10") or "10")
 YTDLP_FRAGMENT_RETRIES = int(os.getenv("YTDLP_FRAGMENT_RETRIES", "10") or "10")
 YTDLP_NETWORK_RETRIES = int(os.getenv("YTDLP_NETWORK_RETRIES", "3") or "3")
-
-# YouTube: refresh cookies from running Chrome via CDP (no need to close the browser).
-# Modes: on_failure (default) | always | off
-YTDLP_CDP_REFRESH_YOUTUBE = os.getenv("YTDLP_CDP_REFRESH_YOUTUBE", "on_failure").strip().lower()
-
-
-def youtube_cdp_refresh_on_failure() -> bool:
-    mode = YTDLP_CDP_REFRESH_YOUTUBE
-    return mode not in ("0", "false", "off", "no", "disabled")
-
-
-def youtube_cdp_refresh_before_download() -> bool:
-    return YTDLP_CDP_REFRESH_YOUTUBE in ("always", "1", "true", "yes", "on")
 
 
 def _parse_browser_spec(spec: str) -> tuple[str, ...] | None:

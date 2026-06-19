@@ -132,6 +132,18 @@ def build_polish_user_message(raw_text: str) -> str:
 {text}"""
 
 
+FOLLOWUP_SYSTEM = """你是文章阅读助手。用户会提供一篇整理后的视频文稿（含目录与原文），随后就文章内容提问。
+
+要求：
+- 只根据提供的文稿回答，不要编造文稿没有的信息。
+- 若文稿无法回答某个问题，明确说明。
+- 用简洁清晰的中文作答。"""
+
+
+def build_followup_article_message(article_text: str) -> str:
+    return f"### 文章正文 ###\n{article_text.strip()}"
+
+
 def build_doubao_prompt(raw_text: str) -> str:
     """Clipboard prompt for Doubao fallback (same rules as DeepSeek)."""
     return (

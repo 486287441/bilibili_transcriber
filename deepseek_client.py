@@ -5,7 +5,13 @@ from __future__ import annotations
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, OpenAI, RateLimitError
 
 import config
-from prompts import POLISH_AND_SUMMARY_SYSTEM, build_polish_user_message
+from prompts import (
+    FOLLOWUP_SYSTEM,
+    POLISH_AND_SUMMARY_SYSTEM,
+    build_followup_article_message,
+    build_polish_user_message,
+)
+from server.settings_store import get_deepseek_model
 
 _TIMEOUT_SECONDS = 120.0
 _TEMPERATURE = 0.3
@@ -58,7 +64,7 @@ def polish_and_summarize(raw_text: str) -> str:
 
     try:
         response = _client().chat.completions.create(
-            model=config.DEEPSEEK_MODEL,
+            model=get_deepseek_model(),
             temperature=_TEMPERATURE,
             messages=[
                 {"role": "system", "content": POLISH_AND_SUMMARY_SYSTEM},
@@ -76,3 +82,92 @@ def polish_and_summarize(raw_text: str) -> str:
         raise DeepSeekError("DeepSeek 返回内容为空，请重试。")
 
     return content.strip()
+
+
+def _build_chat_turns(article_text: str, messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    text = (article_text or "").strip()
+    if not text:
+        raise DeepSeekError("原文为空，无法追问。")
+
+    turns: list[dict[str, str]] = [
+        {"role": "system", "content": FOLLOWUP_SYSTEM},
+        {"role": "user", "content": build_followup_article_message(text)},
+    ]
+    for msg in messages:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        turns.append({"role": role, "content": content})
+
+    if not any(m["role"] == "user" for m in turns[2:]):
+        raise DeepSeekError("请提供至少一条追问。")
+    return turns
+
+
+def _extract_reasoning_delta(delta: object) -> str:
+    rc = getattr(delta, "reasoning_content", None)
+    if rc:
+        return rc
+    extra = getattr(delta, "model_extra", None) or {}
+    if isinstance(extra, dict):
+        rc = extra.get("reasoning_content")
+        if rc:
+            return rc
+    return ""
+
+
+def stream_chat_about_article(article_text: str, messages: list[dict[str, str]]):
+    """Stream follow-up chat; yields dict events: thinking, content, done, error."""
+    turns = _build_chat_turns(article_text, messages)
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+
+    try:
+        stream = _client().chat.completions.create(
+            model=get_deepseek_model(),
+            temperature=_TEMPERATURE,
+            messages=turns,
+            stream=True,
+            extra_body={"thinking": {"type": "enabled"}},
+        )
+    except DeepSeekError:
+        raise
+    except Exception as exc:
+        raise _wrap_api_error(exc) from exc
+
+    try:
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if not delta:
+                continue
+
+            rc = _extract_reasoning_delta(delta)
+            if rc:
+                reasoning_parts.append(rc)
+                yield {"type": "thinking", "delta": rc}
+
+            piece = getattr(delta, "content", None) or ""
+            if piece:
+                content_parts.append(piece)
+                yield {"type": "content", "delta": piece}
+    except Exception as exc:
+        raise _wrap_api_error(exc) from exc
+
+    reply = "".join(content_parts).strip()
+    thinking = "".join(reasoning_parts).strip()
+    if not reply:
+        raise DeepSeekError("DeepSeek 返回内容为空，请重试。")
+
+    yield {"type": "done", "thinking": thinking, "reply": reply}
+
+
+def chat_about_article(article_text: str, messages: list[dict[str, str]]) -> str:
+    """Answer questions about an article; article is injected server-side only."""
+    reply = ""
+    for event in stream_chat_about_article(article_text, messages):
+        if event.get("type") == "done":
+            reply = event.get("reply") or ""
+    return reply

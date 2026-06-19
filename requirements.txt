@@ -1,3 +1,5 @@
+# GPU 转写（RTX 等）：先装 CUDA 版 PyTorch，再装其余依赖
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 funasr
 modelscope
 sentencepiece==0.2.0
@@ -7,6 +9,8 @@ tqdm
 openai
 tokenizers>=0.15.0
 python-dotenv
+fastapi
+uvicorn[standard]
 httpx
 socksio
 websocket-client
