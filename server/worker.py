@@ -92,7 +92,7 @@ class WorkerService:
         if self._thread.is_alive():
             logger.warning("Worker 未在超时内结束，继续关闭")
         self._thread = None
-        model_manager.unload_model()
+        model_manager.unload_model(unload_source="shutdown")
         set_processing(False)
         set_worker_state("idle")
 
@@ -232,6 +232,15 @@ class WorkerService:
                     self._finalize_task(task, final, started_at=started_mono, audio_file=None)
                     return
             else:
+                if task.retry_count > 0:
+                    delay = min(2 ** task.retry_count, 10)
+                    logger.info(
+                        "下载重试退避 task_id=%s retry=%d delay=%ds",
+                        task.id,
+                        task.retry_count,
+                        delay,
+                    )
+                    time.sleep(delay)
                 t0 = time.monotonic()
                 audio_file, meta_dl, dl_error = download_with_progress(task.url, task.id)
                 phase_times["download"] = time.monotonic() - t0

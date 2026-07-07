@@ -18,6 +18,7 @@ if sys.platform == "win32":
         pass
 import re
 import shutil
+import threading
 import torch
 import pyperclip
 
@@ -49,6 +50,7 @@ os.environ["MODELSCOPE_CACHE"] = MODEL_CACHE_DIR
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(_SCRIPT_DIR, "downloads")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+_YTDLP_LOCK = threading.Lock()
 
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -143,9 +145,15 @@ def _ydl_opts_for_site(
     *,
     cookiesfrombrowser: tuple[str, ...] | None = None,
     cookiefile: str | None = None,
+    download_stem: str | None = None,
 ) -> dict:
     """Build yt-dlp options; Bilibili keeps the original referer/cookie behavior."""
     opts = _base_ydl_opts()
+    if download_stem:
+        task_dir = _task_download_dir(download_stem)
+        os.makedirs(task_dir, exist_ok=True)
+        opts["outtmpl"] = os.path.join(task_dir, "%(id)s.%(ext)s")
+        opts["continuedl"] = False
     headers = {"User-Agent": _DEFAULT_USER_AGENT}
     referer = _SITE_REFERERS.get(site)
     if referer:
@@ -178,13 +186,13 @@ def format_ytdlp_error(error: Exception | None) -> str:
     return msg[:2000] if len(msg) > 2000 else msg
 
 
-def _youtube_auth_attempts() -> list[tuple[str, dict]]:
+def _youtube_auth_attempts(*, download_stem: str | None = None) -> list[tuple[str, dict]]:
     """Build YouTube auth attempts: cookie 文件优先，仅 .env 显式配置时才尝试浏览器。"""
     attempts: list[tuple[str, dict]] = []
     seen: set[tuple[str | None, tuple[str, ...] | None]] = set()
 
     def _add(label: str, **kwargs) -> None:
-        opts = _ydl_opts_for_site("youtube", **kwargs)
+        opts = _ydl_opts_for_site("youtube", download_stem=download_stem, **kwargs)
         key = (opts.get("cookiefile"), tuple(opts.get("cookiesfrombrowser") or ()))
         if key in seen:
             return
@@ -201,11 +209,15 @@ def _youtube_auth_attempts() -> list[tuple[str, dict]]:
             _add(f"浏览器 Cookie ({':'.join(configured)})", cookiesfrombrowser=configured)
 
     if not attempts:
-        attempts.append(("无 Cookie", _ydl_opts_for_site("youtube")))
+        attempts.append(("无 Cookie", _ydl_opts_for_site("youtube", download_stem=download_stem)))
     return attempts
 
 
 def _is_network_error(error: Exception | None) -> bool:
+    return _is_retriable_download_error(error)
+
+
+def _is_retriable_download_error(error: Exception | None) -> bool:
     if not error:
         return False
     msg = str(error).lower()
@@ -223,8 +235,46 @@ def _is_network_error(error: Exception | None) -> bool:
             "http error 503",
             "http error 502",
             "http error 429",
+            "http error 416",
+            "requested range not satisfiable",
+            "unexpected_eof",
+            "ssleoferror",
+            "ssl: ",
+            "errno 22",
+            "[errno 22]",
+            "winerror 32",
+            "being used by another process",
+            "unable to rename file",
+            "giving up after",
         )
     )
+
+
+def _task_download_dir(download_stem: str) -> str:
+    return os.path.join(DOWNLOAD_DIR, "tasks", download_stem)
+
+
+def _cleanup_download_artifacts(*, download_stem: str | None = None) -> None:
+    """Remove stale partial/intermediate files that break continuedl on retry."""
+    if download_stem:
+        task_dir = _task_download_dir(download_stem)
+        if os.path.isdir(task_dir):
+            shutil.rmtree(task_dir, ignore_errors=True)
+        return
+    if not os.path.isdir(DOWNLOAD_DIR):
+        return
+    try:
+        names = os.listdir(DOWNLOAD_DIR)
+    except OSError:
+        return
+    for name in names:
+        if not (name.endswith(".part") or ".part-" in name):
+            continue
+        path = os.path.join(DOWNLOAD_DIR, name)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def _is_auth_error(error: Exception | None, *, site: str) -> bool:
@@ -263,14 +313,15 @@ def _run_ytdlp_download(url: str, ydl_opts: dict, progress_hook=None):
         hooks = list(opts.get("progress_hooks") or [])
         hooks.append(progress_hook)
         opts["progress_hooks"] = hooks
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        audio_path = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".wav"
-        meta = {
-            "title": (info.get("title") or "未命名视频").strip(),
-            "url": (info.get("webpage_url") or url).strip(),
-        }
-        return audio_path, meta
+    with _YTDLP_LOCK:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            audio_path = ydl.prepare_filename(info).rsplit(".", 1)[0] + ".wav"
+            meta = {
+                "title": (info.get("title") or "未命名视频").strip(),
+                "url": (info.get("webpage_url") or url).strip(),
+            }
+            return audio_path, meta
 
 
 def _youtube_format_error(error: Exception | None) -> bool:
@@ -347,12 +398,17 @@ def download_bilibili_audio(url):
     return _download_video_audio(url, site="bilibili")
 
 
-def download_video_audio(url, progress_hook=None):
+def download_video_audio(url, progress_hook=None, *, download_stem: str | None = None):
     """Download audio from any supported site via yt-dlp."""
-    return _download_video_audio(url, site=detect_site(url), progress_hook=progress_hook)
+    return _download_video_audio(
+        url,
+        site=detect_site(url),
+        progress_hook=progress_hook,
+        download_stem=download_stem,
+    )
 
 
-def _download_video_audio(url, *, site: str, progress_hook=None):
+def _download_video_audio(url, *, site: str, progress_hook=None, download_stem: str | None = None):
     """Download audio; return (wav_path, meta, error_message)."""
     if not os.path.exists(DOWNLOAD_DIR):
         os.makedirs(DOWNLOAD_DIR)
@@ -363,9 +419,18 @@ def _download_video_audio(url, *, site: str, progress_hook=None):
     }.get(site, site)
     print(f"\n🎵 [下载] 正在通过 yt-dlp 提取音频 ({site_label})...")
 
-    labeled_attempts = (
-        _youtube_auth_attempts() if site == "youtube" else [("默认", _ydl_opts_for_site(site))]
-    )
+    if download_stem:
+        _cleanup_download_artifacts(download_stem=download_stem)
+
+    if site == "youtube":
+        labeled_attempts = _youtube_auth_attempts(download_stem=download_stem)
+    else:
+        labeled_attempts = [
+            (
+                "默认",
+                _ydl_opts_for_site(site, download_stem=download_stem),
+            )
+        ]
 
     _, first_opts = labeled_attempts[0]
     auth_desc = _describe_ytdlp_auth(first_opts)
@@ -390,7 +455,9 @@ def _download_video_audio(url, *, site: str, progress_hook=None):
                 return audio_path, meta, None
             except Exception as e:
                 last_error = e
-                if _is_network_error(e) and net_try < config.YTDLP_NETWORK_RETRIES - 1:
+                if _is_retriable_download_error(e) and net_try < config.YTDLP_NETWORK_RETRIES - 1:
+                    if download_stem:
+                        _cleanup_download_artifacts(download_stem=download_stem)
                     time.sleep(2 * (net_try + 1))
                     continue
                 break
@@ -464,12 +531,29 @@ def transcribe_offline(audio_path, model):
 
 
 def _cleanup_audio(audio_file):
-    try:
-        if audio_file and os.path.exists(audio_file):
-            os.remove(audio_file)
-            print("🗑️ 已清理临时 wav 文件。")
-    except OSError:
-        pass
+    if not audio_file:
+        return
+    task_root = os.path.join(DOWNLOAD_DIR, "tasks")
+    parent = os.path.dirname(os.path.abspath(audio_file))
+    if parent.startswith(os.path.abspath(task_root) + os.sep):
+        shutil.rmtree(parent, ignore_errors=True)
+        print("🗑️ 已清理临时音频文件。")
+        return
+    removed = False
+    for path in (
+        audio_file,
+        os.path.splitext(audio_file)[0] + ".m4a",
+        os.path.splitext(audio_file)[0] + ".mp4",
+        os.path.splitext(audio_file)[0] + ".webm",
+    ):
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+                removed = True
+        except OSError:
+            pass
+    if removed:
+        print("🗑️ 已清理临时音频文件。")
 
 
 def process_video_url(url, model, *, open_browser=True):

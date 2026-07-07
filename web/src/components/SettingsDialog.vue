@@ -1,7 +1,8 @@
 <template>
-  <dialog ref="dlg" class="settings-dialog">
+  <dialog ref="dlg" class="settings-dialog" @cancel.prevent="close">
     <form method="dialog" class="settings-form" @submit.prevent>
-      <h2>设置</h2>
+      <div class="settings-form-scroll ui-scroll">
+        <h2>设置</h2>
       <label class="toggle">
         <input type="checkbox" :checked="settings.clipboard_enabled" @change="toggleClipboard" />
         剪贴板监听
@@ -17,7 +18,7 @@
           <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
         </select>
       </label>
-      <label>
+      <label class="idle-timeout-field">
         空闲卸载模型（分钟）
         <input
           type="number"
@@ -27,6 +28,15 @@
           @change="updateIdle"
         />
       </label>
+      <p class="storage-hint model-lifecycle-hint">
+        上次加载模型的时间：{{ formatModelTime(modelLifecycle.last_loaded_at) }}
+      </p>
+      <p class="storage-hint model-lifecycle-hint">
+        上次卸载模型的时间：{{ formatModelTime(modelLifecycle.last_unloaded_at) }}
+      </p>
+      <p class="storage-hint model-lifecycle-hint">
+        当前显存占用：{{ formatGpuMemory(modelLifecycle) }}
+      </p>
       <fieldset class="storage-section">
         <legend>本地整理稿</legend>
         <div>共 {{ storageStats.count }} 篇，约 {{ formatSize(storageStats.bytes) }}</div>
@@ -51,7 +61,10 @@
         <div>DeepSeek：{{ secrets.deepseek_configured ? '已配置' : '未配置' }}</div>
         <div>飞书：{{ secrets.feishu_configured ? '已配置' : '未配置' }}</div>
       </fieldset>
-      <button type="button" @click="close">关闭</button>
+      </div>
+      <div class="settings-form-footer">
+        <button type="button" class="ghost" @click="close">关闭</button>
+      </div>
     </form>
     <LogViewerDialog ref="logViewerRef" />
   </dialog>
@@ -60,6 +73,7 @@
 <script setup>
 import { ref } from 'vue'
 import { api } from '../api.js'
+import { useModalAnimation } from '../composables/useModalAnimation.js'
 import LogViewerDialog from './LogViewerDialog.vue'
 
 const props = defineProps({
@@ -71,7 +85,9 @@ const emit = defineEmits(['refresh'])
 
 const dlg = ref(null)
 const logViewerRef = ref(null)
+const { openModal, closeModal } = useModalAnimation()
 const storageStats = ref({ count: 0, bytes: 0 })
+const modelLifecycle = ref({ last_loaded_at: null, last_unloaded_at: null })
 const clearing = ref(false)
 const clearMessage = ref('')
 
@@ -80,6 +96,50 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatModelTime(iso) {
+  if (!iso) return '暂无记录'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '暂无记录'
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const hour = String(d.getHours()).padStart(2, '0')
+  const minute = String(d.getMinutes()).padStart(2, '0')
+  return `${month}月${day}日 ${hour}:${minute}`
+}
+
+function formatGpuMemory(status) {
+  if (!status?.gpu_available) return '不适用（CPU 模式）'
+  const allocated = status.gpu_memory_allocated_bytes ?? 0
+  const total = status.gpu_memory_total_bytes
+  if (total) return `${formatSize(allocated)} / ${formatSize(total)}`
+  return formatSize(allocated)
+}
+
+async function loadModelLifecycle() {
+  try {
+    const s = await api.status()
+    modelLifecycle.value = {
+      last_loaded_at: s.model_last_loaded_at,
+      last_unloaded_at: s.model_last_unloaded_at,
+      gpu_available: s.gpu_available,
+      gpu_memory_allocated_bytes: s.gpu_memory_allocated_bytes,
+      gpu_memory_reserved_bytes: s.gpu_memory_reserved_bytes,
+      gpu_memory_total_bytes: s.gpu_memory_total_bytes,
+      gpu_device: s.gpu_device,
+    }
+  } catch {
+    modelLifecycle.value = {
+      last_loaded_at: null,
+      last_unloaded_at: null,
+      gpu_available: false,
+      gpu_memory_allocated_bytes: null,
+      gpu_memory_reserved_bytes: null,
+      gpu_memory_total_bytes: null,
+      gpu_device: null,
+    }
+  }
 }
 
 async function loadStorageStats() {
@@ -92,12 +152,13 @@ async function loadStorageStats() {
 
 function open() {
   clearMessage.value = ''
-  dlg.value?.showModal()
+  openModal(dlg.value)
   loadStorageStats()
+  loadModelLifecycle()
 }
 
-function close() {
-  dlg.value?.close()
+async function close() {
+  await closeModal(dlg.value)
 }
 
 function openLogs() {

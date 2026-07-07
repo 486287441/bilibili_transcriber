@@ -17,7 +17,8 @@ from server import autostart as autostart_service
 from server.errors import register_exception_handlers
 from server.logging_config import configure_logging, new_request_id, request_id_var
 from server import model_manager
-from server.runtime import is_processing, uptime_seconds
+from server.bootstrap_cache import refresh_async as refresh_bootstrap_cache
+from server.status_builder import build_status_payload
 from server.secrets import get_secrets_mask
 from server.settings_store import AppSettings, load_settings, update_settings
 from server.websocket_manager import ws_manager
@@ -26,11 +27,43 @@ from server.listeners import listener_manager
 from server.routes_history import router as history_router
 from server.routes_logs import router as logs_router
 from server.routes_queue import router as queue_router
+from server.warmup import warmup
 from server.worker import worker_service
 
 logger = logging.getLogger("server.app")
 
 _SPA_DIST = config.PROJECT_ROOT / "web" / "dist"
+
+
+def _register_favicon_routes(app: FastAPI) -> None:
+    from fastapi.responses import FileResponse
+
+    assets = (
+        ("/favicon.ico", "favicon.ico", "image/x-icon"),
+        ("/favicon.svg", "favicon.svg", "image/svg+xml"),
+        ("/favicon-16x16.png", "favicon-16x16.png", "image/png"),
+        ("/favicon-32x32.png", "favicon-32x32.png", "image/png"),
+        ("/favicon-48x48.png", "favicon-48x48.png", "image/png"),
+        ("/apple-touch-icon.png", "apple-touch-icon.png", "image/png"),
+    )
+
+    for route, filename, media_type in assets:
+        file_path = _SPA_DIST / filename
+
+        def _handler(
+            _file_path: Path = file_path,
+            _media_type: str = media_type,
+        ) -> FileResponse:
+            if not _file_path.is_file():
+                raise HTTPException(status_code=404)
+            return FileResponse(_file_path, media_type=_media_type)
+
+        app.add_api_route(
+            route,
+            _handler,
+            methods=["GET"],
+            include_in_schema=False,
+        )
 
 
 def _mount_spa(app: FastAPI) -> None:
@@ -90,6 +123,7 @@ async def lifespan(_app: FastAPI):
     listener_manager.start()
     idle_manager.set_event_loop(loop)
     idle_manager.start()
+    warmup()
 
     yield
 
@@ -124,22 +158,24 @@ def create_app() -> FastAPI:
     api = APIRouter(prefix="/api")
 
     @api.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
+    async def health() -> dict[str, Any]:
+        from server.bootstrap_cache import is_ready
+
+        return {
+            "status": "ok",
+            "version": __version__,
+            "ready": is_ready(),
+        }
+
+    @api.get("/bootstrap")
+    async def bootstrap() -> dict[str, Any]:
+        from server.bootstrap_cache import get_bootstrap
+
+        return get_bootstrap()
 
     @api.get("/status")
     async def status() -> dict[str, Any]:
-        base = {
-            "uptime_seconds": round(uptime_seconds(), 2),
-            "is_processing": is_processing(),
-            "worker_state": worker_service.worker_state,
-            "model_loaded": model_manager.is_model_loaded(),
-            "model_loading": model_manager.is_loading(),
-            "websocket_connections": ws_manager.connection_count,
-        }
-        base.update(idle_manager.status_fields())
-        base.update(model_manager.status_fields())
-        return base
+        return build_status_payload()
 
     @api.get("/settings")
     async def get_settings() -> AppSettings:
@@ -161,6 +197,7 @@ def create_app() -> FastAPI:
         from server import activity
 
         activity.touch()
+        refresh_bootstrap_cache()
         await ws_manager.broadcast("settings.changed", updated.model_dump())
         return updated
 
@@ -245,6 +282,7 @@ def create_app() -> FastAPI:
         finally:
             await ws_manager.disconnect(websocket)
 
+    _register_favicon_routes(app)
     _mount_spa(app)
     return app
 

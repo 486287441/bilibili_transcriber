@@ -128,6 +128,20 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             "UPDATE history SET url_key = ? WHERE id = ?",
             (canonical_video_key(row["url"]), row["id"]),
         )
+    # Re-key B站分 P：旧逻辑只按 BV 去重，会误挡同合集其他集。
+    bilibili_rows = conn.execute(
+        """
+        SELECT id, url, url_key FROM history
+        WHERE lower(url) LIKE '%bilibili.com/video/%'
+        """
+    ).fetchall()
+    for row in bilibili_rows:
+        new_key = canonical_video_key(row["url"])
+        if row["url_key"] != new_key:
+            conn.execute(
+                "UPDATE history SET url_key = ? WHERE id = ?",
+                (new_key, row["id"]),
+            )
 
 
 def _row_from_sql(row: sqlite3.Row) -> HistoryRow:

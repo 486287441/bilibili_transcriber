@@ -298,6 +298,9 @@ class QueueService:
         asyncio.run_coroutine_threadsafe(ws_manager.broadcast(event_type, payload), self._loop)
 
     def _emit_queue_updated(self, action: str, task_id: str | None) -> None:
+        from server.bootstrap_cache import refresh_async
+
+        refresh_async()
         self._broadcast("queue.updated", {"action": action, "task_id": task_id})
 
     def _emit_state_changed(self, task_id: str, old_status: str, new_status: str) -> None:

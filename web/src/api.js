@@ -1,10 +1,27 @@
 import { API_BASE } from './config.js'
 
+const REQUEST_TIMEOUT_MS = 15000
+
 async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  })
+  const controller = new AbortController()
+  const timeoutMs = options.timeout ?? REQUEST_TIMEOUT_MS
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const { timeout: _timeout, ...fetchOptions } = options
+  let res
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
+      signal: controller.signal,
+      ...fetchOptions,
+    })
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('请求超时，请确认后台服务已启动')
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
   if (!res.ok) {
     let detail = res.statusText
     try {
@@ -21,6 +38,7 @@ async function request(path, options = {}) {
 
 export const api = {
   health: () => request('/api/health'),
+  bootstrap: () => request('/api/bootstrap'),
   status: () => request('/api/status'),
   settings: () => request('/api/settings'),
   secrets: () => request('/api/settings/secrets'),

@@ -94,6 +94,9 @@ class HistoryService:
         self._broadcast("history.deleted", {"id": history_id})
 
     def _broadcast(self, event_type: str, payload: dict) -> None:
+        from server.bootstrap_cache import refresh_async
+
+        refresh_async()
         if not self._loop:
             return
         asyncio.run_coroutine_threadsafe(ws_manager.broadcast(event_type, payload), self._loop)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 # Order matters: earlier patterns win when multiple could match.
 _VIDEO_URL_PATTERNS: tuple[str, ...] = (
@@ -66,6 +66,17 @@ def extract_bilibili_url(text: str) -> str | None:
     return extract_video_url(text)
 
 
+def _bilibili_part_number(url: str) -> str:
+    """Normalize B站分 P 序号；缺省 p 时视为第 1 集。"""
+    query = parse_qs(urlparse(url).query, keep_blank_values=False)
+    raw = (query.get("p") or query.get("P") or ["1"])[0]
+    try:
+        part = int(raw)
+    except (TypeError, ValueError):
+        return "1"
+    return str(part) if part >= 1 else "1"
+
+
 def canonical_video_key(url: str) -> str:
     """Stable identity for dedup across query strings and minor URL variants."""
     text = (url or "").strip()
@@ -73,7 +84,8 @@ def canonical_video_key(url: str) -> str:
 
     match = re.search(r"/video/(bv[a-z0-9]+)", lowered)
     if match:
-        return f"bilibili:{match.group(1)}"
+        part = _bilibili_part_number(text)
+        return f"bilibili:{match.group(1)}:p{part}"
 
     match = re.search(r"youtu\.be/([a-z0-9_-]+)", lowered)
     if match:

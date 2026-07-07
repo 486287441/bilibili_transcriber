@@ -15,7 +15,7 @@
       <div class="status">
         <span class="dot" :class="wsConnected ? 'ok' : 'err'" />
         {{ wsConnected ? '运行中' : '未连接' }}
-        <span v-if="wsConnected" class="tag" :class="'tag-' + modelStatus.variant">
+        <span v-if="wsConnected" class="tag" :class="'tag-' + modelStatus.variant" :title="modelStatus.title">
           {{ modelStatus.text }}
         </span>
         <div
@@ -105,20 +105,36 @@ const activeTask = computed(() =>
 const modelStatus = computed(() => {
   const s = serviceStatus.value
   if (s.model_loading) {
-    return { text: '模型加载中…', variant: 'busy' }
+    return {
+      text: '模型加载中…',
+      variant: 'busy',
+      title: 'SenseVoice 正在载入显存',
+    }
   }
   if (s.model_loaded) {
     const sec = s.will_sleep_in_seconds
     if (sec != null && sec > 0) {
       if (sec >= 60) {
         const m = Math.ceil(sec / 60)
-        return { text: `模型已加载 · ${m} 分钟后休眠`, variant: 'ok' }
+        return {
+          text: `模型已加载 · ${m} 分钟后休眠`,
+          variant: 'ok',
+          title: '转录模型已在显存中',
+        }
       }
-      return { text: `模型已加载 · ${sec} 秒后休眠`, variant: 'ok' }
+      return {
+        text: `模型已加载 · ${sec} 秒后休眠`,
+        variant: 'ok',
+        title: '转录模型已在显存中',
+      }
     }
-    return { text: '模型已加载', variant: 'ok' }
+    return { text: '模型已加载', variant: 'ok', title: '转录模型已在显存中' }
   }
-  return { text: '模型未加载（空闲）', variant: 'muted' }
+  return {
+    text: '模型未加载（空闲）',
+    variant: 'muted',
+    title: '后台服务在运行；转录模型未载入显存（正常）',
+  }
 })
 
 let wsClient = null
@@ -277,11 +293,22 @@ function openSettings() {
 }
 
 async function loadInitialData() {
-  await Promise.allSettled([
-    refreshQueue(),
-    loadSettingsBundle(),
-    refreshHistory(),
-  ])
+  try {
+    const data = await api.bootstrap()
+    queueItems.value = data.queue ?? []
+    settings.value = data.settings
+    secrets.value = data.secrets
+    serviceStatus.value = data.status
+    historyItems.value = data.history?.items ?? []
+    historyTotal.value = data.history?.total ?? 0
+    await syncProgress()
+  } catch {
+    await Promise.allSettled([
+      refreshQueue(),
+      loadSettingsBundle(),
+      refreshHistory(),
+    ])
+  }
 }
 
 onMounted(async () => {
@@ -296,10 +323,10 @@ onMounted(async () => {
     wsConnected.value = ok
     if (ok) {
       loadInitialData()
+      pollStatus()
     }
   })
   wsClient.start()
-  pollStatus()
 })
 
 onUnmounted(() => {

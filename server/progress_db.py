@@ -39,6 +39,12 @@ CREATE TABLE IF NOT EXISTS model_load_stats (
     device TEXT NOT NULL,
     recorded_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS model_unload_stats (
+    id TEXT PRIMARY KEY,
+    recorded_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'unload'
+);
 """
 
 _lock = threading.Lock()
@@ -209,6 +215,47 @@ def record_model_load(*, load_sec: float, device: str) -> None:
             ),
         )
         conn.commit()
+
+
+def last_model_load_at() -> str | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT recorded_at FROM model_load_stats
+            ORDER BY recorded_at DESC LIMIT 1
+            """
+        ).fetchone()
+    return str(row["recorded_at"]) if row else None
+
+
+def record_model_unload(*, source: str = "unload", recorded_at: str | None = None) -> None:
+    init_progress_stats()
+    at = recorded_at or datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO model_unload_stats (id, recorded_at, source)
+            VALUES (?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                at,
+                source,
+            ),
+        )
+        conn.commit()
+
+
+def last_model_unload_at() -> str | None:
+    init_progress_stats()
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT recorded_at FROM model_unload_stats
+            ORDER BY recorded_at DESC LIMIT 1
+            """
+        ).fetchone()
+    return str(row["recorded_at"]) if row else None
 
 
 def estimate_model_load_seconds(*, device: str = "cpu") -> float:

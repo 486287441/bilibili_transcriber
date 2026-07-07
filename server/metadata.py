@@ -11,8 +11,7 @@ logger = logging.getLogger("server.metadata")
 def fetch_video_metadata(url: str) -> tuple[str | None, float | None]:
     """Return (title, duration_sec) or (None, None) on failure."""
     try:
-        import yt_dlp
-        from bilibili_transcriber import _ydl_opts_for_site
+        from bilibili_transcriber import _YTDLP_LOCK, _ydl_opts_for_site
         from video_urls import detect_site
     except ImportError:
         logger.warning("yt-dlp 未安装，跳过 metadata 预拉取")
@@ -29,8 +28,11 @@ def fetch_video_metadata(url: str) -> tuple[str | None, float | None]:
         }
     )
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        import yt_dlp
+
+        with _YTDLP_LOCK:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
         if not info:
             return None, None
         title = info.get("title")

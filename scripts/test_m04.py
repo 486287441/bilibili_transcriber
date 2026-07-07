@@ -28,6 +28,18 @@ def test_url_extraction_rejects_non_video() -> None:
     print("A3 non-video rejected PASS")
 
 
+def test_bilibili_part_dedup_keys() -> None:
+    from video_urls import canonical_video_key
+
+    base = "https://www.bilibili.com/video/BV1g94y1Q76G"
+    p1 = f"{base}?p=1&vd_source=test"
+    p6 = f"{base}/?p=6&spm_id_from=333"
+    assert canonical_video_key(base) == canonical_video_key(p1)
+    assert canonical_video_key(p1) != canonical_video_key(p6)
+    assert canonical_video_key(p6) == "bilibili:bv1g94y1q76g:p6"
+    print("bilibili part dedup keys PASS")
+
+
 def test_history_dedup() -> None:
     import uuid
 
@@ -116,6 +128,7 @@ def test_api_manual_enqueue_structure() -> None:
 
 def main() -> int:
     test_url_extraction_rejects_non_video()
+    test_bilibili_part_dedup_keys()
     test_history_dedup()
     test_clipboard_silent_dedup()
     try:

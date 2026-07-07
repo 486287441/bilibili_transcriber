@@ -83,7 +83,7 @@ class IdleManager:
                 continue
             if model_manager.is_model_loaded():
                 logger.info("空闲超时，自动卸载模型")
-                model_manager.unload_model(emit_event=True)
+                model_manager.unload_model(emit_event=True, unload_source="idle_timeout")
 
 
 idle_manager = IdleManager()

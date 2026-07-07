@@ -35,6 +35,10 @@ def summarize_task_error(message: str | None) -> str | None:
         return "网络超时"
     if "connection reset" in lower or "connection aborted" in lower:
         return "网络连接被重置"
+    if "416" in msg or "range not satisfiable" in lower:
+        return "下载缓存损坏，正在重试"
+    if "winerror 32" in lower or "being used by another process" in lower:
+        return "下载文件被占用，请重试"
     if "errno 22" in lower or "[errno 22]" in lower:
         return "下载异常，请重试"
 

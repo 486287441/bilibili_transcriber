@@ -16,7 +16,7 @@ $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $logsDir = Get-ProjectLogsDir -ProjectRoot $ProjectRoot
 
 function Wait-ServerHealth {
-    param([int]$TimeoutSec = 20)
+    param([int]$TimeoutSec = 300)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if (Test-OurServerHealth -Port $port) { return $true }
@@ -57,7 +57,7 @@ if (Wait-ServerHealth) {
     exit 0
 }
 
-Write-Host "[error] server did not become healthy within 20s"
+Write-Host "[error] server did not become healthy within 300s (PyTorch 预热可能较慢，见 logs\server.log)"
 Write-Host "[error] see logs\server.log and logs\startup.log"
 Write-StartupLog -ProjectRoot $ProjectRoot -Message "ERROR health check failed PID=$($proc.Id)"
 

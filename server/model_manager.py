@@ -16,6 +16,25 @@ _model_lock = threading.Lock()
 _loop: asyncio.AbstractEventLoop | None = None
 _loading = False
 _load_started_at: float | None = None
+_device_cache: str | None = None
+
+
+def warm_device_cache(device: str) -> None:
+    global _device_cache
+    _device_cache = device
+
+
+def _runtime_device() -> str:
+    global _device_cache
+    if _device_cache is not None:
+        return _device_cache
+    try:
+        from bilibili_transcriber import DEVICE
+
+        _device_cache = DEVICE
+    except ImportError:
+        _device_cache = "cpu"
+    return _device_cache
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -39,17 +58,17 @@ def load_elapsed_seconds() -> float:
 
 def status_fields() -> dict:
     from server import progress_db
+    from server.gpu_stats import gpu_status_fields
+    from server.model_lifecycle import lifecycle_fields
 
-    try:
-        from bilibili_transcriber import DEVICE
-    except ImportError:
-        DEVICE = "cpu"
-
-    eta = progress_db.estimate_model_load_seconds(device=DEVICE)
-    return {
+    eta = progress_db.estimate_model_load_seconds(device=_runtime_device())
+    fields = {
         "model_load_eta_seconds": int(eta),
         "model_load_elapsed_seconds": round(load_elapsed_seconds(), 1),
     }
+    fields.update(lifecycle_fields())
+    fields.update(gpu_status_fields())
+    return fields
 
 
 def _emit(event_type: str, payload: dict | None = None) -> None:
@@ -84,6 +103,8 @@ def get_model(*, emit_event: bool = True):
             DEVICE = "cpu"
             from bilibili_transcriber import load_sensevoice_model
 
+        warm_device_cache(DEVICE)
+
         eta = progress_db.estimate_model_load_seconds(device=DEVICE)
         if emit_event:
             _emit(
@@ -98,6 +119,9 @@ def get_model(*, emit_event: bool = True):
                 raise TimeoutError("模型加载超时")
             _model = loaded
             progress_db.record_model_load(load_sec=elapsed, device=DEVICE)
+            from server.model_lifecycle import record_loaded
+
+            record_loaded()
             logger.info("SenseVoice 模型加载完成 (%.1fs)", elapsed)
             if emit_event:
                 _emit("model.loaded", {"load_sec": round(elapsed, 1)})
@@ -117,7 +141,7 @@ def preload_model_async() -> None:
     threading.Thread(target=_load, name="model-preload", daemon=True).start()
 
 
-def unload_model(*, emit_event: bool = False) -> bool:
+def unload_model(*, emit_event: bool = False, unload_source: str = "unload") -> bool:
     """Release model reference and clear GPU cache. Returns True if unloaded."""
     global _model
     with _model_lock:
@@ -132,6 +156,9 @@ def unload_model(*, emit_event: bool = False) -> bool:
                 torch.cuda.empty_cache()
         except Exception:
             logger.exception("释放 GPU 显存失败")
+        from server.model_lifecycle import record_unloaded
+
+        record_unloaded(source=unload_source)
         if emit_event:
             _emit("model.unloaded", {})
         return True

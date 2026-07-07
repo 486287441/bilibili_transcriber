@@ -62,7 +62,7 @@ def download_with_progress(url: str, task_id: str):
     thread.start()
     hook = _ytdlp_progress_hook(task_id, has_bytes=has_bytes)
     try:
-        audio, meta, err = download_video_audio(url, progress_hook=hook)
+        audio, meta, err = download_video_audio(url, progress_hook=hook, download_stem=task_id)
     finally:
         done.set()
         thread.join(timeout=1.0)

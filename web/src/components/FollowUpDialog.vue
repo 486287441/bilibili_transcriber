@@ -1,5 +1,5 @@
 <template>
-  <dialog ref="dlg" class="followup-dialog" @close="onClose">
+  <dialog ref="dlg" class="followup-dialog" @close="onClose" @cancel.prevent="close">
     <div class="followup-shell">
       <header class="followup-head">
         <div>
@@ -70,6 +70,7 @@
         <p v-if="sendError" class="error compose-error">{{ sendError }}</p>
         <div class="followup-compose-row">
           <textarea
+            ref="inputRef"
             v-model="draft"
             rows="2"
             placeholder="输入你的问题…"
@@ -88,6 +89,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import { api } from '../api.js'
+import { useBackdropDismiss, useModalAnimation } from '../composables/useModalAnimation.js'
 import MarkdownContent from './MarkdownContent.vue'
 
 const CLAUDE_URL = 'https://claude.ai/new'
@@ -99,6 +101,22 @@ function buildClaudeClipboardText(articleContext) {
 
 const dlg = ref(null)
 const scrollRef = ref(null)
+const inputRef = ref(null)
+const { openModal, closeModal } = useModalAnimation()
+
+let closing = false
+
+async function close() {
+  if (closing) return
+  closing = true
+  try {
+    await closeModal(dlg.value)
+  } finally {
+    closing = false
+  }
+}
+
+const { bind: bindBackdropDismiss, unbind: unbindBackdropDismiss } = useBackdropDismiss(dlg, close)
 const historyId = ref(null)
 const title = ref('')
 const followupContext = ref('')
@@ -128,6 +146,14 @@ async function scrollToBottom() {
   scrollRef.value?.scrollTo({ top: scrollRef.value.scrollHeight, behavior: 'smooth' })
 }
 
+async function focusInput() {
+  await nextTick()
+  const el = inputRef.value
+  if (el && !el.disabled) {
+    el.focus({ preventScroll: true })
+  }
+}
+
 async function open(item) {
   historyId.value = item.id
   title.value = item.title || item.url
@@ -139,7 +165,9 @@ async function open(item) {
   sendError.value = ''
   loading.value = false
   copyDone.value = false
-  dlg.value?.showModal()
+  openModal(dlg.value)
+  bindBackdropDismiss()
+  await focusInput()
 
   try {
     const detail = await api.historyDetail(item.id)
@@ -150,14 +178,13 @@ async function open(item) {
     }
   } catch (e) {
     loadError.value = e.message || '加载失败'
+  } finally {
+    await focusInput()
   }
 }
 
-function close() {
-  dlg.value?.close()
-}
-
 function onClose() {
+  unbindBackdropDismiss()
   historyId.value = null
   followupContext.value = ''
   messages.value = []
@@ -254,6 +281,7 @@ async function send() {
     sendError.value = e.message || '发送失败'
   } finally {
     loading.value = false
+    await focusInput()
   }
 }
 

@@ -28,7 +28,8 @@ function Test-OurServerHealth {
         if ($response.StatusCode -ne 200) {
             return $false
         }
-        return $response.Content -match '"status"\s*:\s*"ok"'
+        return ($response.Content -match '"status"\s*:\s*"ok"') -and
+            ($response.Content -match '"ready"\s*:\s*true')
     }
     catch {
         return $false
