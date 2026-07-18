@@ -41,39 +41,43 @@ def test_queue_post_invalid() -> None:
     print("queue invalid URL PASS")
 
 
-def test_autostart_get() -> None:
-    with client() as c:
-        r = c.get("/api/autostart")
-        assert r.status_code == 200, r.text
-        data = r.json()
-        assert "enabled" in data
-        assert data.get("method") in (None, "task_scheduler", "registry")
-    print("autostart GET PASS")
-
-
-def test_autostart_enable_disable() -> None:
-    with client() as c:
-        r = c.post("/api/autostart/enable")
-        assert r.status_code == 200, r.text
-        assert c.get("/api/autostart").json()["enabled"] is True
-        r = c.post("/api/autostart/disable")
-        assert r.status_code == 200, r.text
-        assert c.get("/api/autostart").json()["enabled"] is False
-    print("D1/D3 autostart enable/disable PASS")
-
-
 def test_autostart_absolute_paths() -> None:
-    from server.autostart import _build_launch_command, _project_root, _silent_launcher_vbs
+    from server.autostart import (
+        _build_launch_command,
+        _expected_startup_bat_content,
+        _project_root,
+        _silent_launcher_vbs,
+    )
 
     cmd = _build_launch_command()
     vbs = str(_silent_launcher_vbs())
     root = str(_project_root())
+    bat = _expected_startup_bat_content()
     assert vbs in cmd, cmd
     assert root in cmd, cmd
     assert "wscript.exe" in cmd.lower(), cmd
     assert "launch_silent.vbs" in cmd, cmd
     assert "cmd /c" not in cmd.lower(), cmd
+    assert cmd in bat, bat
+    assert "start.bat" not in bat.lower(), bat
     print("D4 absolute paths PASS")
+
+
+def test_model_load_failure_is_recoverable() -> None:
+    import bilibili_transcriber as transcriber
+
+    original = transcriber.AutoModel
+    try:
+        transcriber.AutoModel = lambda **_kwargs: (_ for _ in ()).throw(ValueError("test failure"))
+        try:
+            transcriber.load_sensevoice_model()
+        except RuntimeError as exc:
+            assert "SenseVoice" in str(exc), exc
+        else:
+            raise AssertionError("model-load failure should raise RuntimeError")
+    finally:
+        transcriber.AutoModel = original
+    print("model-load failure recovery PASS")
 
 
 def main() -> int:
@@ -81,9 +85,8 @@ def main() -> int:
         test_b1_model_not_loaded_at_idle,
         test_status_fields,
         test_queue_post_invalid,
-        test_autostart_get,
-        test_autostart_enable_disable,
         test_autostart_absolute_paths,
+        test_model_load_failure_is_recoverable,
     ]
     for fn in tests:
         fn()

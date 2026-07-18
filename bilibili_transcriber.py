@@ -501,7 +501,9 @@ def load_sensevoice_model():
         return model
     except Exception as e:
         print(f"❌ 模型加载失败: {e}")
-        sys.exit(1)
+        # This function is also called from the web worker.  Exiting here
+        # kills that worker thread and leaves its queue task stuck in progress.
+        raise RuntimeError(f"SenseVoice 模型加载失败: {e}") from e
 
 
 def transcribe_offline(audio_path, model):

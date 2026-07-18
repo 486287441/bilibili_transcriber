@@ -47,20 +47,19 @@ def _register_favicon_routes(app: FastAPI) -> None:
         ("/apple-touch-icon.png", "apple-touch-icon.png", "image/png"),
     )
 
+    def _make_handler(file_path, media_type: str):
+        def _handler() -> FileResponse:
+            if not file_path.is_file():
+                raise HTTPException(status_code=404)
+            return FileResponse(file_path, media_type=media_type)
+
+        return _handler
+
     for route, filename, media_type in assets:
         file_path = _SPA_DIST / filename
-
-        def _handler(
-            _file_path: Path = file_path,
-            _media_type: str = media_type,
-        ) -> FileResponse:
-            if not _file_path.is_file():
-                raise HTTPException(status_code=404)
-            return FileResponse(_file_path, media_type=_media_type)
-
         app.add_api_route(
             route,
-            _handler,
+            _make_handler(file_path, media_type),
             methods=["GET"],
             include_in_schema=False,
         )
@@ -88,7 +87,6 @@ class SettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     clipboard_enabled: bool | None = None
-    autostart_enabled: bool | None = None
     auto_open_feishu: bool | None = None
     model_load_policy: str | None = Field(default=None, pattern="^(lazy|eager)$")
     model_idle_timeout_minutes: int | None = Field(default=None, ge=1, le=1440)
@@ -124,6 +122,7 @@ async def lifespan(_app: FastAPI):
     idle_manager.set_event_loop(loop)
     idle_manager.start()
     warmup()
+    autostart_service.refresh_autostart_if_needed()
 
     yield
 
@@ -236,36 +235,6 @@ def create_app() -> FastAPI:
     app.include_router(queue_router)
     app.include_router(history_router)
     app.include_router(logs_router)
-
-    @api.get("/autostart")
-    async def get_autostart() -> dict:
-        return autostart_service.get_autostart_status()
-
-    @api.post("/autostart/enable")
-    async def enable_autostart() -> dict:
-        try:
-            result = autostart_service.enable_autostart()
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": str(exc), "code": "AUTOSTART_ENABLE_FAILED"},
-            ) from exc
-        settings = load_settings()
-        await ws_manager.broadcast("settings.changed", settings.model_dump())
-        return result
-
-    @api.post("/autostart/disable")
-    async def disable_autostart() -> dict:
-        try:
-            result = autostart_service.disable_autostart()
-        except RuntimeError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": str(exc), "code": "AUTOSTART_DISABLE_FAILED"},
-            ) from exc
-        settings = load_settings()
-        await ws_manager.broadcast("settings.changed", settings.model_dump())
-        return result
 
     app.include_router(api)
 

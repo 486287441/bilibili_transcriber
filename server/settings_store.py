@@ -26,7 +26,6 @@ def _default_deepseek_model() -> str:
 
 class AppSettings(BaseModel):
     clipboard_enabled: bool = True
-    autostart_enabled: bool = False
     auto_open_feishu: bool = False
     model_load_policy: str = Field(default="lazy", pattern="^(lazy|eager)$")
     model_idle_timeout_minutes: int = Field(default=30, ge=1, le=1440)

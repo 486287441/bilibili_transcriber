@@ -1,8 +1,8 @@
-"""Windows autostart: Task Scheduler (preferred), Startup-folder shortcut, Registry Run fallback.
+"""Windows autostart via the current user's Startup folder.
 
-Startup-folder shortcuts show a readable name in Task Manager (e.g. 视频转文稿助手).
-Registry Run entries often appear only as wscript.exe / Windows Script Host, which
-is easy to disable by mistake.
+Task Manager shows the startup entry's executable/script name, not a .lnk
+display name. We therefore place a product-named .bat directly in Startup;
+it silently delegates to launch_silent.vbs in the project directory.
 """
 
 from __future__ import annotations
@@ -10,39 +10,28 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 import winreg
 from pathlib import Path
 
 import config
-from server.settings_store import load_settings, update_settings
 
 logger = logging.getLogger("server.autostart")
 
 TASK_NAME = "BilibiliTranscriber"
-REGISTRY_VALUE_NAME = "BilibiliTranscriber"
 REGISTRY_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 SILENT_LAUNCHER_NAME = "launch_silent.vbs"
-AUTOSTART_BAT_NAME = "start-autostart.bat"
-STARTUP_SHORTCUT_NAME = "视频转文稿助手.lnk"
+STARTUP_ENTRY_NAME = "哔哩哔哩 Transcriber.bat"
 REGISTRY_ACCESS = winreg.KEY_READ | winreg.KEY_SET_VALUE
 LEGACY_REGISTRY_NAMES = frozenset(
     {
+        "BilibiliTranscriber",
         "BilibiliTranscriberTest",
     }
 )
 
 
-def _python_exe() -> Path:
-    return Path(sys.executable).resolve()
-
-
 def _project_root() -> Path:
     return config.PROJECT_ROOT.resolve()
-
-
-def _autostart_bat() -> Path:
-    return _project_root() / AUTOSTART_BAT_NAME
 
 
 def _silent_launcher_vbs() -> Path:
@@ -53,64 +42,32 @@ def _startup_folder() -> Path:
     return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
 
-def _startup_shortcut_path() -> Path:
-    return _startup_folder() / STARTUP_SHORTCUT_NAME
+def _startup_entry_path() -> Path:
+    return _startup_folder() / STARTUP_ENTRY_NAME
 
 
-def _startup_shortcut_exists() -> bool:
-    return _startup_shortcut_path().is_file()
-
-
-def _create_startup_shortcut() -> None:
-    vbs = _silent_launcher_vbs()
-    if not vbs.is_file():
-        raise RuntimeError(f"找不到静默启动脚本: {vbs}")
-    shortcut = _startup_shortcut_path()
-    root = _project_root()
-    wscript = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "wscript.exe"
-    _startup_folder().mkdir(parents=True, exist_ok=True)
-    ps = (
-        "$ws = New-Object -ComObject WScript.Shell; "
-        f"$s = $ws.CreateShortcut('{shortcut}'); "
-        f"$s.TargetPath = '{wscript}'; "
-        f"$s.Arguments = '//B \"{vbs}\"'; "
-        f"$s.WorkingDirectory = '{root}'; "
-        "$s.WindowStyle = 7; "
-        "$s.Description = '视频转文稿助手 — 登录后后台启动'; "
-        "$s.Save()"
-    )
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
-    if result.returncode != 0 or not shortcut.is_file():
-        err = (result.stderr or result.stdout or "创建启动快捷方式失败").strip()
-        raise RuntimeError(err)
-
-
-def _delete_startup_shortcut() -> None:
-    path = _startup_shortcut_path()
-    if path.is_file():
-        path.unlink()
+def _startup_entry_exists() -> bool:
+    return _startup_entry_path().is_file()
 
 
 def _build_launch_command() -> str:
-    """Absolute paths; wscript //B runs VBS without script UI or console."""
+    """Absolute wscript command used inside the Startup .bat."""
     vbs = _silent_launcher_vbs()
     return f'wscript.exe //B "{vbs}"'
 
 
-def _uses_legacy_launcher(command: str | None) -> bool:
-    if not command:
+def _expected_startup_bat_content() -> str:
+    return f"@echo off\r\n{_build_launch_command()}\r\n"
+
+
+def _startup_entry_is_current() -> bool:
+    path = _startup_entry_path()
+    if not path.is_file():
         return False
-    lowered = command.lower()
-    if "launch_silent.vbs" in lowered:
+    try:
+        return path.read_text(encoding="utf-8") == _expected_startup_bat_content()
+    except OSError:
         return False
-    return "cmd /c" in lowered or "python.exe" in lowered or "-m server" in lowered
 
 
 def _run_schtasks(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -124,52 +81,19 @@ def _run_schtasks(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _is_task_registered() -> bool:
-    return _run_schtasks(["/Query", "/TN", TASK_NAME, "/FO", "LIST"]).returncode == 0
-
-
-def _read_task_command() -> str | None:
-    result = _run_schtasks(["/Query", "/TN", TASK_NAME, "/V", "/FO", "LIST"])
+def _delete_task_scheduler_entry() -> bool:
+    query = _run_schtasks(["/Query", "/TN", TASK_NAME, "/FO", "LIST"])
+    if query.returncode != 0:
+        return False
+    result = _run_schtasks(["/Delete", "/TN", TASK_NAME, "/F"])
     if result.returncode != 0:
-        return None
-    for line in (result.stdout or "").splitlines():
-        stripped = line.strip()
-        if ":" not in stripped:
-            continue
-        key, _, value = stripped.partition(":")
-        key_lower = key.lower()
-        if key_lower in ("task to run", "要运行的任务", "要執行的工作"):
-            return value.strip()
-    return None
-
-
-def _read_registry_command() -> str | None:
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_RUN_PATH, 0, winreg.KEY_READ) as key:
-            value, _ = winreg.QueryValueEx(key, REGISTRY_VALUE_NAME)
-            return str(value) if value else None
-    except FileNotFoundError:
-        return None
-    except OSError:
-        logger.exception("读取注册表自启项失败")
-        return None
-
-
-def _write_registry_command(command: str) -> None:
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_RUN_PATH, 0, REGISTRY_ACCESS) as key:
-        winreg.SetValueEx(key, REGISTRY_VALUE_NAME, 0, winreg.REG_SZ, command)
-
-
-def _delete_registry_command() -> None:
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_RUN_PATH, 0, REGISTRY_ACCESS) as key:
-            winreg.DeleteValue(key, REGISTRY_VALUE_NAME)
-    except FileNotFoundError:
-        pass
+        logger.warning("删除遗留计划任务自启项失败: %s", (result.stderr or result.stdout).strip())
+        return False
+    logger.info("已移除遗留计划任务自启项: %s", TASK_NAME)
+    return True
 
 
 def _cleanup_legacy_registry_entries() -> list[str]:
-    """Remove leftover Run-key entries that still launch via cmd/python.exe."""
     root = str(_project_root()).lower()
     removed: list[str] = []
     try:
@@ -181,175 +105,150 @@ def _cleanup_legacy_registry_entries() -> list[str]:
                 except OSError:
                     break
 
-                value_str = str(value)
-                lowered = value_str.lower()
-                is_legacy_name = name in LEGACY_REGISTRY_NAMES
-                is_legacy_cmd = (
-                    name != REGISTRY_VALUE_NAME
-                    and root in lowered
-                    and "launch_silent.vbs" not in lowered
+                lowered = str(value).lower()
+                should_remove = name in LEGACY_REGISTRY_NAMES or (
+                    root in lowered
                     and (
-                        "cmd /c" in lowered
+                        "launch_silent.vbs" in lowered
+                        or "cmd /c" in lowered
                         or "python.exe" in lowered
                         or "start.bat" in lowered
                     )
                 )
-                if is_legacy_name or is_legacy_cmd:
+                if should_remove:
                     winreg.DeleteValue(key, name)
                     removed.append(name)
-                    logger.info("已移除遗留开机自启项: %s", name)
+                    logger.info("已移除遗留注册表自启项: %s", name)
                     continue
                 index += 1
+    except FileNotFoundError:
+        pass
     except OSError:
         logger.exception("清理遗留注册表自启项失败")
     return removed
 
 
-def _detect_method() -> str | None:
-    if _is_task_registered():
-        return "task_scheduler"
-    if _startup_shortcut_exists():
-        return "startup_folder"
-    if _read_registry_command():
-        return "registry"
-    return None
+def _read_lnk_target(path: Path) -> str | None:
+    ps = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('"
+        + str(path).replace("'", "''")
+        + "'); Write-Output $s.TargetPath"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    target = (result.stdout or "").strip()
+    return target or None
 
 
-def get_autostart_status() -> dict:
-    method = _detect_method()
-    settings = load_settings()
-    enabled = method is not None and settings.autostart_enabled
-    return {
-        "enabled": enabled,
-        "method": method,
-        "settings_flag": settings.autostart_enabled,
-    }
-
-
-def refresh_autostart_if_needed() -> None:
-    """Re-register when settings say enabled but launch command is the old cmd window."""
-    settings = load_settings()
-    if not settings.autostart_enabled:
-        return
-    if not _silent_launcher_vbs().is_file():
-        logger.warning("静默启动脚本不存在: %s", _silent_launcher_vbs())
-        return
-
-    removed = _cleanup_legacy_registry_entries()
-    if removed:
-        logger.info("清理遗留自启项: %s", ", ".join(removed))
-
-    method = _detect_method()
-    if method is None:
-        logger.info("设置已开启自启但系统项缺失，正在重新注册")
-        try:
-            enable_autostart()
-        except Exception:
-            logger.exception("重新注册自启失败")
-        return
-
-    expected = _build_launch_command()
-    current: str | None = None
-    if method == "task_scheduler":
-        current = _read_task_command()
-    elif method == "registry":
-        current = _read_registry_command()
-    elif method == "startup_folder":
-        current = _build_launch_command()
-    else:
-        current = None
-
-    if current is None:
-        return
-    if current.strip() == expected.strip():
-        return
-    if not _uses_legacy_launcher(current):
-        return
-
-    logger.info("迁移开机自启为静默启动（无终端窗口）")
-    try:
-        enable_autostart()
-    except Exception:
-        logger.exception("迁移静默自启失败")
-
-
-def enable_autostart() -> dict:
+def _create_startup_entry() -> None:
     vbs = _silent_launcher_vbs()
     if not vbs.is_file():
         raise RuntimeError(f"找不到静默启动脚本: {vbs}")
 
-    _cleanup_legacy_registry_entries()
-    command = _build_launch_command()
-    logger.info("注册开机自启: %s", vbs)
+    _startup_folder().mkdir(parents=True, exist_ok=True)
+    _startup_entry_path().write_text(_expected_startup_bat_content(), encoding="utf-8")
 
-    task_result = _run_schtasks(
-        [
-            "/Create",
-            "/TN",
-            TASK_NAME,
-            "/TR",
-            command,
-            "/SC",
-            "ONLOGON",
-            "/RL",
-            "LIMITED",
-            "/F",
-        ]
-    )
-    if task_result.returncode == 0:
-        _delete_registry_command()
-        _delete_startup_shortcut()
-        update_settings({"autostart_enabled": True})
-        return get_autostart_status()
 
-    task_err = (task_result.stderr or task_result.stdout or "").strip()
-    logger.warning("计划任务注册失败，尝试「启动」文件夹快捷方式: %s", task_err)
+def _cleanup_old_startup_entries() -> list[str]:
+    removed: list[str] = []
+    folder = _startup_folder()
+    if not folder.is_dir():
+        return removed
 
-    try:
-        _create_startup_shortcut()
-        _delete_registry_command()
-    except RuntimeError as exc:
-        logger.warning("启动文件夹注册失败，尝试注册表 Run 键: %s", exc)
+    root = str(_project_root()).lower()
+    current = _startup_entry_path().resolve()
+
+    for path in folder.iterdir():
+        if path.resolve() == current:
+            continue
+
+        if path.suffix.lower() == ".lnk":
+            target = _read_lnk_target(path)
+            if target and root in target.lower():
+                try:
+                    path.unlink()
+                    removed.append(path.name)
+                    logger.info("已移除遗留启动文件夹快捷方式: %s", path)
+                except OSError:
+                    logger.exception("删除遗留启动文件夹快捷方式失败: %s", path)
+            continue
+
+        if path.suffix.lower() != ".bat":
+            continue
+
+        name = path.name.lower()
+        if path.name == STARTUP_ENTRY_NAME:
+            continue
+        if "bilibili" not in name and "transcriber" not in name and "转文稿" not in path.name:
+            continue
         try:
-            _write_registry_command(command)
-            _delete_startup_shortcut()
-        except OSError as reg_exc:
-            raise RuntimeError(
-                f"自启注册失败（计划任务、启动文件夹、注册表均不可用）: {exc}; {reg_exc}"
-            ) from reg_exc
+            text = path.read_text(encoding="utf-8", errors="ignore").lower()
+        except OSError:
+            continue
+        if root in text or "launch_silent.vbs" in text or "start.bat" in text:
+            try:
+                path.unlink()
+                removed.append(path.name)
+                logger.info("已移除遗留启动文件夹脚本: %s", path)
+            except OSError:
+                logger.exception("删除遗留启动文件夹脚本失败: %s", path)
+    return removed
 
-    if _is_task_registered():
-        _run_schtasks(["/Delete", "/TN", TASK_NAME, "/F"])
 
-    update_settings({"autostart_enabled": True})
+def cleanup_legacy_autostart_entries() -> list[str]:
+    removed: list[str] = []
+    if _delete_task_scheduler_entry():
+        removed.append(f"task:{TASK_NAME}")
+    removed.extend(f"registry:{name}" for name in _cleanup_legacy_registry_entries())
+    removed.extend(f"startup:{name}" for name in _cleanup_old_startup_entries())
+    return removed
+
+
+def ensure_autostart() -> dict:
+    """Keep the app registered as a readable Startup-folder entry."""
+    cleanup_legacy_autostart_entries()
+    if not _startup_entry_is_current():
+        _create_startup_entry()
     status = get_autostart_status()
-    if status["method"] is None:
+    if not status["enabled"]:
         raise RuntimeError("自启注册后状态异常")
     return status
 
 
-def disable_autostart() -> dict:
-    if _is_task_registered():
-        result = _run_schtasks(["/Delete", "/TN", TASK_NAME, "/F"])
-        if result.returncode != 0:
-            msg = (result.stderr or result.stdout or "schtasks 删除失败").strip()
-            logger.error("取消计划任务自启失败: %s", msg)
+def get_autostart_status() -> dict:
+    return {
+        "enabled": _startup_entry_exists(),
+        "method": "startup_folder" if _startup_entry_exists() else None,
+        "entry": str(_startup_entry_path()),
+        "name": STARTUP_ENTRY_NAME,
+    }
 
+
+def refresh_autostart_if_needed() -> None:
+    """Compatibility wrapper used by older callers."""
     try:
-        _delete_registry_command()
-        _delete_startup_shortcut()
-        _cleanup_legacy_registry_entries()
-    except OSError as exc:
-        logger.error("删除注册表自启项失败: %s", exc)
-        raise RuntimeError(f"取消自启失败: {exc}") from exc
+        ensure_autostart()
+    except Exception:
+        logger.exception("校准开机自启失败")
 
-    update_settings({"autostart_enabled": False})
+
+def enable_autostart() -> dict:
+    """Compatibility wrapper; autostart is now always the Startup entry."""
+    return ensure_autostart()
+
+
+def disable_autostart() -> dict:
+    """Compatibility wrapper retained for scripts/tests, not exposed in the UI."""
+    cleanup_legacy_autostart_entries()
+    path = _startup_entry_path()
+    if path.is_file():
+        path.unlink()
     return get_autostart_status()
-
-
-def run_task_now() -> None:
-    """Simulate boot trigger when task_scheduler method is active."""
-    result = _run_schtasks(["/Run", "/TN", TASK_NAME])
-    if result.returncode != 0:
-        msg = (result.stderr or result.stdout or "schtasks /Run 失败").strip()
-        raise RuntimeError(msg)
