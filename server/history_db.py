@@ -77,6 +77,11 @@ class HistoryRow:
         }
         if self.error_message:
             data["error_summary"] = summarize_task_error(self.error_message)
+        if self.status == "completed":
+            from server.article_store import load_polished
+            from server.recommendation import parse_recommendation
+
+            data["recommendation"] = parse_recommendation(load_polished(self.task_id))
         if include_text:
             from prompts import build_followup_article_message
             from server.article_store import load_polished

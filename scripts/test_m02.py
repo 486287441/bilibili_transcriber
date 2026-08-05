@@ -43,24 +43,20 @@ def test_queue_post_invalid() -> None:
 
 def test_autostart_absolute_paths() -> None:
     from server.autostart import (
-        _build_launch_command,
-        _expected_startup_bat_content,
         _project_root,
         _silent_launcher_vbs,
+        _startup_icon,
+        _startup_launcher,
     )
 
-    cmd = _build_launch_command()
     vbs = str(_silent_launcher_vbs())
     root = str(_project_root())
-    bat = _expected_startup_bat_content()
-    assert vbs in cmd, cmd
-    assert root in cmd, cmd
-    assert "wscript.exe" in cmd.lower(), cmd
-    assert "launch_silent.vbs" in cmd, cmd
-    assert "cmd /c" not in cmd.lower(), cmd
-    assert cmd in bat, bat
-    assert "start.bat" not in bat.lower(), bat
-    print("D4 absolute paths PASS")
+    assert vbs.startswith(root), vbs
+    assert str(_startup_launcher()).startswith(root), _startup_launcher()
+    assert str(_startup_icon()).startswith(root), _startup_icon()
+    assert _startup_launcher().name == "哔哩哔哩 Transcriber.exe"
+    assert _startup_icon().name == "favicon.ico"
+    print("D4 startup launcher paths PASS")
 
 
 def test_model_load_failure_is_recoverable() -> None:

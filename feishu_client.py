@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 import config
+from server.settings_store import load_settings
 from text_stats import format_article_stats_block
 
 _LARK_IDENTITY = "user"
@@ -40,14 +41,26 @@ class VideoDoc:
     node_token: str | None = None
 
 
-def _wiki_doc_title(video_title: str, when: datetime) -> str:
-    """Date-prefixed title for sorting in the archive folder."""
-    base = re.sub(r"\s+", " ", (video_title or "").strip()) or "未命名视频"
-    prefix = when.strftime("%Y-%m-%d ")
-    room = _MAX_WIKI_TITLE_LEN - len(prefix)
-    if room < 10:
-        return base[:_MAX_WIKI_TITLE_LEN]
-    return prefix + base[:room]
+def _render_template(template: str, values: dict[str, str]) -> str:
+    rendered = template
+    for name, value in values.items():
+        rendered = rendered.replace("{{" + name + "}}", value)
+    return rendered
+
+
+def _wiki_doc_title(video_title: str, when: datetime, template: str) -> str:
+    """Render the editable wiki title template and enforce Feishu's title limit."""
+    display_title = re.sub(r"\s+", " ", (video_title or "").strip()) or "未命名视频"
+    rendered = _render_template(
+        template,
+        {
+            "title": display_title,
+            "date": when.strftime("%Y-%m-%d"),
+            "datetime": when.strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
+    normalized = re.sub(r"\s+", " ", rendered).strip() or display_title
+    return normalized[:_MAX_WIKI_TITLE_LEN]
 
 
 def _parse_cli_json(stdout: str) -> dict[str, Any]:
@@ -180,7 +193,7 @@ def create_video_document(
     transcribed_at: datetime | str,
     body_md: str,
 ) -> str:
-    """Create a new Feishu doc for one video and write header + body. Returns doc URL."""
+    """Create a Feishu doc with the article first and video metadata at the end."""
     if isinstance(transcribed_at, datetime):
         when = transcribed_at
         time_str = when.strftime("%Y-%m-%d %H:%M:%S")
@@ -189,16 +202,23 @@ def create_video_document(
         time_str = str(transcribed_at).strip()
 
     display_title = (title or "").strip() or "未命名视频"
-    doc = _create_wiki_doc_node(_wiki_doc_title(display_title, when))
+    settings = load_settings()
+    doc = _create_wiki_doc_node(
+        _wiki_doc_title(display_title, when, settings.feishu_title_template)
+    )
 
     body = body_md.strip()
-    content = (
-        f"# {display_title}\n\n"
-        f"**标题：** {display_title}  \n"
-        f"**链接：** {url.strip()}  \n"
-        f"**转写时间：** {time_str}\n\n"
-        f"{format_article_stats_block(body)}\n"
-        f"{body}\n"
+    content = _render_template(
+        settings.feishu_document_template,
+        {
+            "body": body,
+            "title": display_title,
+            "url": url.strip(),
+            "transcribed_at": time_str,
+            "date": when.strftime("%Y-%m-%d"),
+            "stats": format_article_stats_block(body),
+        },
     )
+    content = content.strip() + "\n"
     _write_markdown(doc.document_id, content)
     return doc.url

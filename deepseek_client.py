@@ -7,11 +7,15 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, Authenti
 import config
 from prompts import (
     FOLLOWUP_SYSTEM,
-    POLISH_AND_SUMMARY_SYSTEM,
     build_followup_article_message,
     build_polish_user_message,
+    render_polish_system,
 )
-from server.settings_store import get_deepseek_model
+from server.settings_store import (
+    get_deepseek_model,
+    get_polish_prompt_template,
+    get_recommendation_criteria,
+)
 
 _TIMEOUT_SECONDS = 120.0
 _TEMPERATURE = 0.3
@@ -62,12 +66,16 @@ def polish_and_summarize(raw_text: str) -> str:
     if not text:
         raise DeepSeekError("转写文本为空，无法调用 DeepSeek。")
 
+    system_prompt = render_polish_system(
+        get_polish_prompt_template(),
+        get_recommendation_criteria(),
+    )
     try:
         response = _client().chat.completions.create(
             model=get_deepseek_model(),
             temperature=_TEMPERATURE,
             messages=[
-                {"role": "system", "content": POLISH_AND_SUMMARY_SYSTEM},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": build_polish_user_message(text)},
             ],
         )
@@ -81,7 +89,55 @@ def polish_and_summarize(raw_text: str) -> str:
     if not content or not content.strip():
         raise DeepSeekError("DeepSeek 返回内容为空，请重试。")
 
-    return content.strip()
+    from server.recommendation import normalize_recommendation
+
+    return normalize_recommendation(content)
+
+
+def evaluate_recommendation(article_text: str) -> str:
+    """Evaluate an existing polished article without re-running the full polish flow."""
+    text = (article_text or "").strip()
+    if not text:
+        raise DeepSeekError("整理后文稿为空，无法评估。")
+
+    recommendation_criteria = get_recommendation_criteria()
+    system = f"""你是视频注意力守门助手。请根据整理后的视频文稿，分别评估内容本身是否值得了解，以及用户读完总结后原片还有多少增量价值。
+
+{recommendation_criteria}
+
+只输出一个完整的「# 推荐指数」Markdown 章节，不要复述文章，不要输出思考过程。"""
+    try:
+        from server.recommendation import remove_recommendation
+
+        response = _client().chat.completions.create(
+            model=get_deepseek_model(),
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": build_followup_article_message(remove_recommendation(text)),
+                },
+            ],
+        )
+    except DeepSeekError:
+        raise
+    except Exception as exc:
+        raise _wrap_api_error(exc) from exc
+
+    choice = response.choices[0] if response.choices else None
+    content = choice.message.content if choice and choice.message else None
+    if not content or not content.strip():
+        raise DeepSeekError("DeepSeek 返回的推荐评估为空，请重试。")
+
+    from server.recommendation import normalize_recommendation, parse_recommendation
+
+    result = content.strip()
+    if not result.startswith("# 推荐指数"):
+        result = f"# 推荐指数\n{result}"
+    if not parse_recommendation(result):
+        raise DeepSeekError("DeepSeek 返回的推荐评估格式不完整，请重试。")
+    return normalize_recommendation(result)
 
 
 def _build_chat_turns(article_text: str, messages: list[dict[str, str]]) -> list[dict[str, str]]:

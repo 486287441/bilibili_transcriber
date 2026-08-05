@@ -8,8 +8,12 @@ from typing import Callable
 from urllib.parse import urlparse
 
 import config
-from prompts import POLISH_AND_SUMMARY_SYSTEM, build_polish_user_message
-from server.settings_store import get_deepseek_model
+from prompts import build_polish_user_message, render_polish_system
+from server.settings_store import (
+    get_deepseek_model,
+    get_polish_prompt_template,
+    get_recommendation_criteria,
+)
 
 # Chinese-heavy transcript ≈ 1.6 chars per token (empirical default).
 CHARS_PER_TOKEN = 1.6
@@ -91,7 +95,11 @@ def resolve_model_profile(
 
 def estimate_input_tokens(polish_chars: int) -> int:
     template_chars = len(build_polish_user_message(""))
-    total_chars = len(POLISH_AND_SUMMARY_SYSTEM) + template_chars + max(0, polish_chars)
+    system_prompt = render_polish_system(
+        get_polish_prompt_template(),
+        get_recommendation_criteria(),
+    )
+    total_chars = len(system_prompt) + template_chars + max(0, polish_chars)
     return max(1, int(total_chars / CHARS_PER_TOKEN))
 
 

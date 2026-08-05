@@ -23,9 +23,17 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def validation_exception_handler(
         _request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        details = []
+        for raw_error in exc.errors():
+            error = dict(raw_error)
+            if "ctx" in error:
+                error["ctx"] = {
+                    key: str(value) for key, value in error["ctx"].items()
+                }
+            details.append(error)
         return JSONResponse(
             status_code=422,
-            content={"error": "请求参数无效", "code": "VALIDATION_ERROR", "details": exc.errors()},
+            content={"error": "请求参数无效", "code": "VALIDATION_ERROR", "details": details},
         )
 
     @app.exception_handler(Exception)

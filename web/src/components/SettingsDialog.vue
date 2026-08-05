@@ -37,6 +37,77 @@
       <p class="storage-hint model-lifecycle-hint">
         当前显存占用：{{ formatGpuMemory(modelLifecycle) }}
       </p>
+      <fieldset class="advanced-settings-section">
+        <legend>Prompt 与飞书格式</legend>
+        <p class="advanced-settings-intro">
+          以下内容会持久化保存，并用于之后的新任务与历史记录单独评估。
+        </p>
+
+        <details class="prompt-editor" open>
+          <summary>推荐判断标准</summary>
+          <p class="editor-hint">包含评分维度、广告扣分、等级区间和固定输出格式。</p>
+          <textarea
+            v-model="advanced.recommendation_criteria"
+            rows="18"
+            spellcheck="false"
+            aria-label="推荐判断标准"
+          />
+          <div class="editor-actions">
+            <button type="button" :disabled="saving === 'recommendation'" @click="saveRecommendation">
+              {{ saving === 'recommendation' ? '保存中…' : '保存推荐标准' }}
+            </button>
+            <button type="button" class="ghost" @click="restoreRecommendation">恢复默认</button>
+          </div>
+          <p v-if="messages.recommendation" class="storage-message">{{ messages.recommendation }}</p>
+        </details>
+
+        <details class="prompt-editor">
+          <summary>文章润色 Prompt</summary>
+          <p class="editor-hint">
+            <code v-pre>{{recommendation_criteria}}</code> 表示推荐标准的插入位置；删除该占位符时，推荐标准会自动追加到末尾。
+          </p>
+          <textarea
+            v-model="advanced.polish_prompt_template"
+            rows="20"
+            spellcheck="false"
+            aria-label="文章润色 Prompt"
+          />
+          <div class="editor-actions">
+            <button type="button" :disabled="saving === 'polish'" @click="savePolishPrompt">
+              {{ saving === 'polish' ? '保存中…' : '保存润色 Prompt' }}
+            </button>
+            <button type="button" class="ghost" @click="restorePolishPrompt">恢复默认</button>
+          </div>
+          <p v-if="messages.polish" class="storage-message">{{ messages.polish }}</p>
+        </details>
+
+        <details class="prompt-editor">
+          <summary>飞书文档格式</summary>
+          <p class="editor-hint">
+            标题支持 <code v-pre>{{date}}</code>、<code v-pre>{{datetime}}</code>、<code v-pre>{{title}}</code>。
+          </p>
+          <label class="template-field">
+            飞书文档标题模板
+            <input v-model="advanced.feishu_title_template" type="text" spellcheck="false" />
+          </label>
+          <p class="editor-hint">
+            正文支持 <code v-pre>{{body}}</code>、<code v-pre>{{title}}</code>、<code v-pre>{{url}}</code>、<code v-pre>{{transcribed_at}}</code>、<code v-pre>{{date}}</code>、<code v-pre>{{stats}}</code>；必须保留 <code v-pre>{{body}}</code>。
+          </p>
+          <textarea
+            v-model="advanced.feishu_document_template"
+            rows="14"
+            spellcheck="false"
+            aria-label="飞书文档正文模板"
+          />
+          <div class="editor-actions">
+            <button type="button" :disabled="saving === 'feishu'" @click="saveFeishuTemplates">
+              {{ saving === 'feishu' ? '保存中…' : '保存飞书格式' }}
+            </button>
+            <button type="button" class="ghost" @click="restoreFeishuTemplates">恢复默认</button>
+          </div>
+          <p v-if="messages.feishu" class="storage-message">{{ messages.feishu }}</p>
+        </details>
+      </fieldset>
       <fieldset class="storage-section">
         <legend>本地整理稿</legend>
         <div>共 {{ storageStats.count }} 篇，约 {{ formatSize(storageStats.bytes) }}</div>
@@ -71,7 +142,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { api } from '../api.js'
 import { useModalAnimation } from '../composables/useModalAnimation.js'
 import LogViewerDialog from './LogViewerDialog.vue'
@@ -90,6 +161,15 @@ const storageStats = ref({ count: 0, bytes: 0 })
 const modelLifecycle = ref({ last_loaded_at: null, last_unloaded_at: null })
 const clearing = ref(false)
 const clearMessage = ref('')
+const saving = ref('')
+const advancedDefaults = reactive({
+  recommendation_criteria: '',
+  polish_prompt_template: '',
+  feishu_title_template: '',
+  feishu_document_template: '',
+})
+const advanced = reactive({ ...advancedDefaults })
+const messages = reactive({ recommendation: '', polish: '', feishu: '' })
 
 function formatSize(bytes) {
   if (!bytes) return '0 B'
@@ -150,11 +230,31 @@ async function loadStorageStats() {
   }
 }
 
+function syncAdvancedDrafts() {
+  advanced.recommendation_criteria = props.settings.recommendation_criteria || ''
+  advanced.polish_prompt_template = props.settings.polish_prompt_template || ''
+  advanced.feishu_title_template = props.settings.feishu_title_template || ''
+  advanced.feishu_document_template = props.settings.feishu_document_template || ''
+}
+
+async function loadAdvancedDefaults() {
+  try {
+    Object.assign(advancedDefaults, await api.settingsDefaults())
+  } catch {
+    /* Current values remain editable even if defaults cannot be loaded. */
+  }
+}
+
 function open() {
   clearMessage.value = ''
+  messages.recommendation = ''
+  messages.polish = ''
+  messages.feishu = ''
+  syncAdvancedDrafts()
   openModal(dlg.value)
   loadStorageStats()
   loadModelLifecycle()
+  loadAdvancedDefaults()
 }
 
 async function close() {
@@ -186,6 +286,61 @@ async function updateIdle(ev) {
     await api.updateSettings({ model_idle_timeout_minutes: v })
     emit('refresh')
   }
+}
+
+async function saveAdvanced(kind, payload) {
+  if (saving.value) return false
+  saving.value = kind
+  messages[kind] = ''
+  try {
+    await api.updateSettings(payload)
+    messages[kind] = '已保存，后续任务将使用新设置。'
+    emit('refresh')
+    return true
+  } catch (e) {
+    messages[kind] = e.message || '保存失败'
+    return false
+  } finally {
+    saving.value = ''
+  }
+}
+
+function saveRecommendation() {
+  return saveAdvanced('recommendation', {
+    recommendation_criteria: advanced.recommendation_criteria,
+  })
+}
+
+function savePolishPrompt() {
+  return saveAdvanced('polish', {
+    polish_prompt_template: advanced.polish_prompt_template,
+  })
+}
+
+function saveFeishuTemplates() {
+  return saveAdvanced('feishu', {
+    feishu_title_template: advanced.feishu_title_template,
+    feishu_document_template: advanced.feishu_document_template,
+  })
+}
+
+async function restoreRecommendation() {
+  if (!advancedDefaults.recommendation_criteria) await loadAdvancedDefaults()
+  advanced.recommendation_criteria = advancedDefaults.recommendation_criteria
+  await saveRecommendation()
+}
+
+async function restorePolishPrompt() {
+  if (!advancedDefaults.polish_prompt_template) await loadAdvancedDefaults()
+  advanced.polish_prompt_template = advancedDefaults.polish_prompt_template
+  await savePolishPrompt()
+}
+
+async function restoreFeishuTemplates() {
+  if (!advancedDefaults.feishu_document_template) await loadAdvancedDefaults()
+  advanced.feishu_title_template = advancedDefaults.feishu_title_template
+  advanced.feishu_document_template = advancedDefaults.feishu_document_template
+  await saveFeishuTemplates()
 }
 
 async function clearPolished() {

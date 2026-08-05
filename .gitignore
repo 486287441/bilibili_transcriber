@@ -10,6 +10,7 @@ www.bilibili.com_cookies.txt
 /ffprobe.exe
 /python-*.exe
 *.exe
+!哔哩哔哩 Transcriber.exe
 
 # --- Python ---
 __pycache__/

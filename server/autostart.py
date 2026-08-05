@@ -1,9 +1,4 @@
-"""Windows autostart via the current user's Startup folder.
-
-Task Manager shows the startup entry's executable/script name, not a .lnk
-display name. We therefore place a product-named .bat directly in Startup;
-it silently delegates to launch_silent.vbs in the project directory.
-"""
+"""Windows autostart via a named shortcut to the product launcher."""
 
 from __future__ import annotations
 
@@ -20,7 +15,9 @@ logger = logging.getLogger("server.autostart")
 TASK_NAME = "BilibiliTranscriber"
 REGISTRY_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 SILENT_LAUNCHER_NAME = "launch_silent.vbs"
-STARTUP_ENTRY_NAME = "哔哩哔哩 Transcriber.bat"
+STARTUP_ENTRY_NAME = "哔哩哔哩 Transcriber.lnk"
+STARTUP_LAUNCHER_NAME = "哔哩哔哩 Transcriber.exe"
+STARTUP_ICON_NAME = "favicon.ico"
 REGISTRY_ACCESS = winreg.KEY_READ | winreg.KEY_SET_VALUE
 LEGACY_REGISTRY_NAMES = frozenset(
     {
@@ -38,6 +35,14 @@ def _silent_launcher_vbs() -> Path:
     return _project_root() / SILENT_LAUNCHER_NAME
 
 
+def _startup_launcher() -> Path:
+    return _project_root() / STARTUP_LAUNCHER_NAME
+
+
+def _startup_icon() -> Path:
+    return _project_root() / STARTUP_ICON_NAME
+
+
 def _startup_folder() -> Path:
     return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
@@ -46,28 +51,15 @@ def _startup_entry_path() -> Path:
     return _startup_folder() / STARTUP_ENTRY_NAME
 
 
-def _startup_entry_exists() -> bool:
-    return _startup_entry_path().is_file()
-
-
-def _build_launch_command() -> str:
-    """Absolute wscript command used inside the Startup .bat."""
-    vbs = _silent_launcher_vbs()
-    return f'wscript.exe //B "{vbs}"'
-
-
-def _expected_startup_bat_content() -> str:
-    return f"@echo off\r\n{_build_launch_command()}\r\n"
-
-
 def _startup_entry_is_current() -> bool:
     path = _startup_entry_path()
     if not path.is_file():
         return False
-    try:
-        return path.read_text(encoding="utf-8") == _expected_startup_bat_content()
-    except OSError:
+    shortcut = _read_shortcut(path)
+    if shortcut is None:
         return False
+    target, icon = shortcut
+    return target == str(_startup_launcher()) and icon == f"{_startup_icon()},0"
 
 
 def _run_schtasks(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -129,10 +121,15 @@ def _cleanup_legacy_registry_entries() -> list[str]:
 
 
 def _read_lnk_target(path: Path) -> str | None:
+    shortcut = _read_shortcut(path)
+    return shortcut[0] if shortcut else None
+
+
+def _read_shortcut(path: Path) -> tuple[str, str] | None:
     ps = (
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('"
         + str(path).replace("'", "''")
-        + "'); Write-Output $s.TargetPath"
+        + "'); Write-Output $s.TargetPath; Write-Output $s.IconLocation"
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
@@ -144,17 +141,40 @@ def _read_lnk_target(path: Path) -> str | None:
     )
     if result.returncode != 0:
         return None
-    target = (result.stdout or "").strip()
-    return target or None
+    fields = (result.stdout or "").splitlines()
+    if not fields or not fields[0].strip():
+        return None
+    return fields[0].strip(), fields[1].strip() if len(fields) > 1 else ""
 
 
 def _create_startup_entry() -> None:
-    vbs = _silent_launcher_vbs()
-    if not vbs.is_file():
-        raise RuntimeError(f"找不到静默启动脚本: {vbs}")
-
+    launcher = _startup_launcher()
+    icon = _startup_icon()
+    if not launcher.is_file():
+        raise RuntimeError(f"找不到开机启动器: {launcher}")
+    if not icon.is_file():
+        raise RuntimeError(f"找不到开机启动图标: {icon}")
     _startup_folder().mkdir(parents=True, exist_ok=True)
-    _startup_entry_path().write_text(_expected_startup_bat_content(), encoding="utf-8")
+    shortcut = _startup_entry_path()
+    ps = (
+        "$ws = New-Object -ComObject WScript.Shell; "
+        f"$s = $ws.CreateShortcut('{str(shortcut).replace("'", "''")}'); "
+        f"$s.TargetPath = '{str(launcher).replace("'", "''")}'; "
+        f"$s.WorkingDirectory = '{str(_project_root()).replace("'", "''")}'; "
+        f"$s.IconLocation = '{str(icon).replace("'", "''")},0'; "
+        "$s.Description = 'Bilibili Transcriber - login startup'; "
+        "$s.Save()"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0 or not _startup_entry_is_current():
+        raise RuntimeError((result.stderr or result.stdout or "创建开机启动快捷方式失败").strip())
 
 
 def _cleanup_old_startup_entries() -> list[str]:
@@ -225,8 +245,8 @@ def ensure_autostart() -> dict:
 
 def get_autostart_status() -> dict:
     return {
-        "enabled": _startup_entry_exists(),
-        "method": "startup_folder" if _startup_entry_exists() else None,
+        "enabled": _startup_entry_path().is_file(),
+        "method": "startup_folder" if _startup_entry_path().is_file() else None,
         "entry": str(_startup_entry_path()),
         "name": STARTUP_ENTRY_NAME,
     }

@@ -48,11 +48,17 @@
       :total="historyTotal"
       :page="historyPage"
       :collapsed="historyCollapsed"
+      :evaluating-ids="recommendationEvaluating"
       @search="onHistorySearch"
       @page="onHistoryPage"
       @delete="onDeleteHistory"
+      @evaluate-recommendation="onEvaluateRecommendation"
       @toggle-collapse="toggleHistoryCollapsed"
     />
+
+    <div v-if="notice" class="app-notice" role="status" aria-live="polite">
+      {{ notice }}
+    </div>
 
     <SettingsDialog
       ref="settingsRef"
@@ -93,6 +99,8 @@ const historyPage = ref(1)
 const historyQuery = ref('')
 const historyCollapsed = ref(storageGet('ui.historyCollapsed', false))
 const settingsRef = ref(null)
+const recommendationEvaluating = ref(new Set())
+const notice = ref('')
 
 const ACTIVE = new Set(['downloading', 'transcribing', 'polishing'])
 
@@ -139,6 +147,23 @@ const modelStatus = computed(() => {
 
 let wsClient = null
 let statusTimer = null
+let noticeTimer = null
+
+function showNotice(message) {
+  notice.value = message
+  if (noticeTimer != null) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => {
+    notice.value = ''
+    noticeTimer = null
+  }, 2600)
+}
+
+function setRecommendationEvaluating(id, evaluating) {
+  const next = new Set(recommendationEvaluating.value)
+  if (evaluating) next.add(id)
+  else next.delete(id)
+  recommendationEvaluating.value = next
+}
 
 function scheduleStatusPoll(loading = false) {
   if (statusTimer != null) clearTimeout(statusTimer)
@@ -226,6 +251,17 @@ function handleWs(msg) {
   }
   if (msg.type === 'history.created' || msg.type === 'history.deleted') {
     refreshHistory()
+    return
+  }
+  if (msg.type === 'history.recommendation_completed') {
+    setRecommendationEvaluating(msg.payload?.id, false)
+    refreshHistory()
+    showNotice('推荐指数评估完成')
+    return
+  }
+  if (msg.type === 'history.recommendation_failed') {
+    setRecommendationEvaluating(msg.payload?.id, false)
+    showNotice(msg.payload?.error || '推荐指数评估失败')
   }
 }
 
@@ -283,6 +319,18 @@ async function onDeleteHistory(id) {
   await refreshHistory()
 }
 
+async function onEvaluateRecommendation(id) {
+  if (recommendationEvaluating.value.has(id)) return
+  setRecommendationEvaluating(id, true)
+  try {
+    await api.evaluateRecommendation(id)
+    showNotice('已开始评估')
+  } catch (e) {
+    setRecommendationEvaluating(id, false)
+    showNotice(e.message || '启动评估失败')
+  }
+}
+
 function toggleHistoryCollapsed() {
   historyCollapsed.value = !historyCollapsed.value
   storageSet('ui.historyCollapsed', historyCollapsed.value)
@@ -331,6 +379,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (statusTimer != null) clearTimeout(statusTimer)
+  if (noticeTimer != null) clearTimeout(noticeTimer)
   wsClient?.stop()
 })
 </script>

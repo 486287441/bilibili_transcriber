@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import config
 from server import __version__
@@ -20,7 +20,7 @@ from server import model_manager
 from server.bootstrap_cache import refresh_async as refresh_bootstrap_cache
 from server.status_builder import build_status_payload
 from server.secrets import get_secrets_mask
-from server.settings_store import AppSettings, load_settings, update_settings
+from server.settings_store import AppSettings, editable_defaults, load_settings, update_settings
 from server.websocket_manager import ws_manager
 from server.idle_manager import idle_manager
 from server.listeners import listener_manager
@@ -94,7 +94,18 @@ class SettingsUpdate(BaseModel):
         default=None,
         pattern="^(deepseek-v4-pro|deepseek-v4-flash)$",
     )
+    recommendation_criteria: str | None = Field(default=None, min_length=20, max_length=50000)
+    polish_prompt_template: str | None = Field(default=None, min_length=20, max_length=100000)
+    feishu_title_template: str | None = Field(default=None, min_length=1, max_length=500)
+    feishu_document_template: str | None = Field(default=None, min_length=10, max_length=50000)
     recent_completed_dedup_minutes: int | None = Field(default=None, ge=0, le=10080)
+
+    @field_validator("feishu_document_template")
+    @classmethod
+    def _require_feishu_body_placeholder(cls, value: str | None) -> str | None:
+        if value is not None and "{{body}}" not in value:
+            raise ValueError("飞书正文模板必须包含 {{body}} 占位符")
+        return value
 
 
 @asynccontextmanager
@@ -179,6 +190,10 @@ def create_app() -> FastAPI:
     @api.get("/settings")
     async def get_settings() -> AppSettings:
         return load_settings()
+
+    @api.get("/settings/defaults")
+    async def get_settings_defaults() -> dict[str, str]:
+        return editable_defaults()
 
     @api.get("/settings/secrets")
     async def get_settings_secrets() -> dict:

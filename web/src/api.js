@@ -41,6 +41,7 @@ export const api = {
   bootstrap: () => request('/api/bootstrap'),
   status: () => request('/api/status'),
   settings: () => request('/api/settings'),
+  settingsDefaults: () => request('/api/settings/defaults'),
   secrets: () => request('/api/settings/secrets'),
   updateSettings: (body) => request('/api/settings', { method: 'PUT', body: JSON.stringify(body) }),
   polishedStorage: () => request('/api/storage/polished'),
@@ -66,6 +67,8 @@ export const api = {
   deleteHistory: (id) => request(`/api/history/${id}`, { method: 'DELETE' }),
   reprocessHistory: (id, mode = 'full') =>
     request(`/api/history/${id}/reprocess`, { method: 'POST', body: JSON.stringify({ mode }) }),
+  evaluateRecommendation: (id) =>
+    request(`/api/history/${id}/recommendation`, { method: 'POST' }),
   historyChat: (id, messages) =>
     request(`/api/history/${id}/chat`, { method: 'POST', body: JSON.stringify({ messages }) }),
   async *historyChatStream(id, messages) {
