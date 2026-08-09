@@ -95,6 +95,7 @@ class SettingsUpdate(BaseModel):
         pattern="^(deepseek-v4-pro|deepseek-v4-flash)$",
     )
     recommendation_criteria: str | None = Field(default=None, min_length=20, max_length=50000)
+    transcript_correction_prompt: str | None = Field(default=None, min_length=20, max_length=50000)
     polish_prompt_template: str | None = Field(default=None, min_length=20, max_length=100000)
     feishu_title_template: str | None = Field(default=None, min_length=1, max_length=500)
     feishu_document_template: str | None = Field(default=None, min_length=10, max_length=50000)

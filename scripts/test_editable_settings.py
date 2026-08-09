@@ -20,6 +20,7 @@ from server.settings_store import AppSettings, editable_defaults
 def test_editable_defaults() -> None:
     defaults = editable_defaults()
     assert "全文软广" in defaults["recommendation_criteria"]
+    assert "恢复说话人最可能的原话" in defaults["transcript_correction_prompt"]
     assert "{{recommendation_criteria}}" in defaults["polish_prompt_template"]
     assert "{{body}}" in defaults["feishu_document_template"]
     assert AppSettings().feishu_title_template == "{{date}} {{title}}"

@@ -11,10 +11,12 @@ from prompts import (
     build_polish_user_message,
     render_polish_system,
 )
+from transcript_processing import remove_asr_punctuation
 from server.settings_store import (
     get_deepseek_model,
     get_polish_prompt_template,
     get_recommendation_criteria,
+    get_transcript_correction_prompt,
 )
 
 _TIMEOUT_SECONDS = 120.0
@@ -60,23 +62,15 @@ def _wrap_api_error(exc: BaseException) -> DeepSeekError:
     return DeepSeekError(f"DeepSeek 调用失败：{exc}", cause=exc)
 
 
-def polish_and_summarize(raw_text: str) -> str:
-    """Polish transcript and append a summary section; returns Markdown."""
-    text = (raw_text or "").strip()
-    if not text:
-        raise DeepSeekError("转写文本为空，无法调用 DeepSeek。")
-
-    system_prompt = render_polish_system(
-        get_polish_prompt_template(),
-        get_recommendation_criteria(),
-    )
+def _completion(system_prompt: str, user_message: str, *, temperature: float = _TEMPERATURE) -> str:
+    """Run one non-streaming DeepSeek completion and return non-empty text."""
     try:
         response = _client().chat.completions.create(
             model=get_deepseek_model(),
-            temperature=_TEMPERATURE,
+            temperature=temperature,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": build_polish_user_message(text)},
+                {"role": "user", "content": user_message},
             ],
         )
     except DeepSeekError:
@@ -88,10 +82,44 @@ def polish_and_summarize(raw_text: str) -> str:
     content = choice.message.content if choice and choice.message else None
     if not content or not content.strip():
         raise DeepSeekError("DeepSeek 返回内容为空，请重试。")
+    return content.strip()
+
+
+def correct_transcript(raw_text: str) -> str:
+    """Stage 1: strip ASR punctuation, then conservatively correct the transcript."""
+    text = remove_asr_punctuation(raw_text).strip()
+    if not text:
+        raise DeepSeekError("转写文本为空，无法调用 DeepSeek。")
+    return _completion(get_transcript_correction_prompt(), text)
+
+
+def organize_transcript(trusted_text: str) -> str:
+    """Stage 2: build recommendation, summary, TOC, and chapter structure."""
+    text = (trusted_text or "").strip()
+    if not text:
+        raise DeepSeekError("可信逐字稿为空，无法调用 DeepSeek。")
+
+    system_prompt = render_polish_system(
+        get_polish_prompt_template(),
+        get_recommendation_criteria(),
+    )
+    content = _completion(system_prompt, build_polish_user_message(text))
 
     from server.recommendation import normalize_recommendation
 
     return normalize_recommendation(content)
+
+
+def process_transcript(raw_text: str, *, input_is_trusted: bool = False) -> tuple[str, str]:
+    """Run the two-stage flow; return ``(trusted transcript, article Markdown)``."""
+    trusted_text = (raw_text or "").strip() if input_is_trusted else correct_transcript(raw_text)
+    return trusted_text, organize_transcript(trusted_text)
+
+
+def polish_and_summarize(raw_text: str, *, input_is_trusted: bool = False) -> str:
+    """Backward-compatible article-only facade for the two-stage flow."""
+    _trusted_text, article = process_transcript(raw_text, input_is_trusted=input_is_trusted)
+    return article
 
 
 def evaluate_recommendation(article_text: str) -> str:

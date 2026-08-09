@@ -29,7 +29,7 @@
         <tbody>
           <tr v-for="item in items" :key="item.id">
             <td>
-              <a v-if="item.output_doc_url" :href="item.output_doc_url" target="_blank" rel="noopener">
+              <a v-if="item.url" :href="item.url" target="_blank" rel="noopener noreferrer">
                 <TaskLabel :url="item.url" :title="item.title" />
               </a>
               <TaskLabel v-else :url="item.url" :title="item.title" />

@@ -342,6 +342,7 @@ class WorkerService:
             url=task.url,
             task_id=task.id,
             open_browser=should_auto_open_feishu(),
+            input_is_trusted=True,
         )
         if not ok:
             return queue_service.handle_failure(task.id, "发布失败（已执行回退流程）")

@@ -49,6 +49,12 @@ def _default_polish_prompt_template() -> str:
     return POLISH_PROMPT_TEMPLATE
 
 
+def _default_transcript_correction_prompt() -> str:
+    from prompts import TRANSCRIPT_CORRECTION_SYSTEM
+
+    return TRANSCRIPT_CORRECTION_SYSTEM
+
+
 class AppSettings(BaseModel):
     clipboard_enabled: bool = True
     auto_open_feishu: bool = False
@@ -60,6 +66,11 @@ class AppSettings(BaseModel):
     )
     recommendation_criteria: str = Field(
         default_factory=_default_recommendation_criteria,
+        min_length=20,
+        max_length=50000,
+    )
+    transcript_correction_prompt: str = Field(
+        default_factory=_default_transcript_correction_prompt,
         min_length=20,
         max_length=50000,
     )
@@ -87,6 +98,7 @@ class AppSettings(BaseModel):
 
     @field_validator(
         "recommendation_criteria",
+        "transcript_correction_prompt",
         "polish_prompt_template",
         "feishu_title_template",
         "feishu_document_template",
@@ -146,6 +158,10 @@ def get_recommendation_criteria() -> str:
     return load_settings().recommendation_criteria
 
 
+def get_transcript_correction_prompt() -> str:
+    return load_settings().transcript_correction_prompt
+
+
 def get_polish_prompt_template() -> str:
     return load_settings().polish_prompt_template
 
@@ -153,6 +169,7 @@ def get_polish_prompt_template() -> str:
 def editable_defaults() -> dict[str, str]:
     return {
         "recommendation_criteria": _default_recommendation_criteria(),
+        "transcript_correction_prompt": _default_transcript_correction_prompt(),
         "polish_prompt_template": _default_polish_prompt_template(),
         "feishu_title_template": DEFAULT_FEISHU_TITLE_TEMPLATE,
         "feishu_document_template": DEFAULT_FEISHU_DOCUMENT_TEMPLATE,

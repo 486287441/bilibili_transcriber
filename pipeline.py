@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pyperclip
 
-from deepseek_client import DeepSeekError, polish_and_summarize
+from deepseek_client import DeepSeekError, correct_transcript, organize_transcript
 from feishu_client import FeishuError, create_video_document
 from prompts import build_doubao_prompt
 
@@ -42,11 +42,22 @@ def postprocess_and_publish(
     *,
     title: str,
     url: str,
-) -> tuple[str, str]:
-    """Run DeepSeek polish/summary and create one Feishu doc per video."""
-    print("\n[DeepSeek] 润色与摘要中...")
-    body_md = polish_and_summarize(raw_text)
+    input_is_trusted: bool = False,
+    task_id: str | None = None,
+) -> tuple[str, str, str]:
+    """Run the two DeepSeek stages and create one Feishu doc per video."""
+    if input_is_trusted:
+        trusted_text = raw_text.strip()
+    else:
+        print("\n[DeepSeek] 断句、标点与保守纠错中...")
+        trusted_text = correct_transcript(raw_text)
+    if task_id:
+        transcript_path = _PROJECT_ROOT / "downloads" / "transcripts" / f"{task_id}.txt"
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        transcript_path.write_text(trusted_text.strip() + "\n", encoding="utf-8")
 
+    print("[DeepSeek] 生成推荐指数、总结、目录与章节中...")
+    body_md = organize_transcript(trusted_text)
     print("[飞书] 创建视频文档...")
     doc_url = create_video_document(
         title=title,
@@ -54,7 +65,7 @@ def postprocess_and_publish(
         transcribed_at=datetime.now(),
         body_md=body_md,
     )
-    return doc_url, body_md
+    return doc_url, body_md, trusted_text
 
 
 def fallback_to_doubao(raw_text: str) -> None:
@@ -72,12 +83,19 @@ def publish_or_fallback(
     url: str,
     open_browser: bool = True,
     task_id: str | None = None,
+    input_is_trusted: bool = False,
 ) -> bool:
     """Try cloud publish; on failure run Doubao fallback. Returns True if Feishu succeeded."""
     backup_transcript(raw_text)
 
     try:
-        doc_url, body_md = postprocess_and_publish(raw_text, title=title, url=url)
+        doc_url, body_md, _trusted_text = postprocess_and_publish(
+            raw_text,
+            title=title,
+            url=url,
+            input_is_trusted=input_is_trusted,
+            task_id=task_id,
+        )
     except (DeepSeekError, FeishuError) as exc:
         print(f"\n[失败] 发布失败: {exc}")
         fallback_to_doubao(raw_text)
@@ -105,12 +123,19 @@ def publish_or_fallback_result(
     url: str,
     open_browser: bool = True,
     task_id: str | None = None,
+    input_is_trusted: bool = False,
 ) -> tuple[bool, str | None]:
     """Same flow as publish_or_fallback but also returns Feishu URL on success."""
     backup_transcript(raw_text)
 
     try:
-        doc_url, body_md = postprocess_and_publish(raw_text, title=title, url=url)
+        doc_url, body_md, _trusted_text = postprocess_and_publish(
+            raw_text,
+            title=title,
+            url=url,
+            input_is_trusted=input_is_trusted,
+            task_id=task_id,
+        )
     except (DeepSeekError, FeishuError) as exc:
         print(f"\n[失败] 发布失败: {exc}")
         fallback_to_doubao(raw_text)

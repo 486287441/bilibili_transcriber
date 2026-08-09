@@ -9,9 +9,9 @@
         <div class="followup-head-actions">
           <button
             type="button"
-            class="ghost followup-claude-btn"
+            class="ghost followup-gpt-btn"
             :disabled="!!loadError || !followupContext || copying"
-            @click="copyForClaude"
+            @click="copyForGpt"
           >
             {{ copyLabel }}
           </button>
@@ -92,11 +92,11 @@ import { api } from '../api.js'
 import { useBackdropDismiss, useModalAnimation } from '../composables/useModalAnimation.js'
 import MarkdownContent from './MarkdownContent.vue'
 
-const CLAUDE_URL = 'https://claude.ai/new'
-const CLAUDE_PROMPT_SUFFIX = '\n\n严肃客观分析这篇文章'
+const CHATGPT_URL = 'https://chatgpt.com/'
+const GPT_PROMPT_SUFFIX = '\n\n我想和你探讨这篇文章，首先请你先客观地严肃地分析一下这篇文章'
 
-function buildClaudeClipboardText(articleContext) {
-  return `${articleContext.trim()}${CLAUDE_PROMPT_SUFFIX}`
+function buildGptClipboardText(articleContext) {
+  return `${articleContext.trim()}${GPT_PROMPT_SUFFIX}`
 }
 
 const dlg = ref(null)
@@ -132,7 +132,7 @@ const copyDone = ref(false)
 const copyLabel = computed(() => {
   if (copying.value) return '复制中…'
   if (copyDone.value) return '已复制'
-  return '复制去问claude'
+  return '复制去问GPT'
 })
 
 function toApiMessages(msgs) {
@@ -214,16 +214,16 @@ async function writeClipboard(text) {
   if (!ok) throw new Error('无法写入剪贴板')
 }
 
-async function copyForClaude() {
+async function copyForGpt() {
   const text = followupContext.value?.trim()
   if (!text || copying.value) return
 
   copying.value = true
   copyDone.value = false
   try {
-    await writeClipboard(buildClaudeClipboardText(text))
+    await writeClipboard(buildGptClipboardText(text))
     copyDone.value = true
-    window.open(CLAUDE_URL, '_blank', 'noopener,noreferrer')
+    window.open(CHATGPT_URL, '_blank', 'noopener,noreferrer')
     setTimeout(() => {
       copyDone.value = false
     }, 2000)

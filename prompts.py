@@ -2,6 +2,24 @@
 
 from __future__ import annotations
 
+TRANSCRIPT_CORRECTION_SYSTEM = """这是语音识别生成的无标点转写稿，其中可能存在错字、同音近音误识别、漏字、多字和专有名词识别错误。
+
+请根据上下文恢复说话人最可能的原话：
+
+* 重新断句、添加标点并合理分段；
+* 修正能够从语义、语法或上下文明确判断的语音识别错误；
+* 忠实保留原意、措辞和口语风格，不进行润色或内容改写；
+* 不得仅为了让句子更优美而修改文字；无法可靠判断时保留原文。
+
+只输出校对后的完整转写稿。"""
+
+TRUSTED_TRANSCRIPT_RULES = """**步骤 B — 保留可信逐字稿**
+- 输入已经过单独的断句、标点与保守纠错流程，是可信逐字稿；本阶段不得再次纠错、润色或改写。
+- 「原文」正文必须完整保留可信逐字稿的措辞、口语表达、标点和先后顺序，不得增删内容。
+- 只允许为章节整理插入 `##` 标题；沿用逐字稿已有的自然段，不要重新拼写正文。
+
+"""
+
 VIDEO_SUMMARY_RULES = """## 「视频总结」写法（# 视频总结 章节内）
 
 先识别视频整体结构类型（教程 / 访谈 / 演讲 / 讨论 / 新闻时评 / 财经分析 / 新闻串讲，只选最贴切的一种），再按类型侧重提炼，不要把所有内容平等对待。
@@ -154,28 +172,12 @@ TOC_RULES = """## 「目录」写法（# 目录 章节内）
 - 不要写一级标题 # 视频总结 / # 目录 / # 原文 自身。
 - 根据视频类型组织目录用语：教程用步骤感，访谈用话题感，演讲用论点感，讨论用议题感。"""
 
-ORIGINAL_RULES = """## 「原文」写法（# 原文 章节内）
+ORIGINAL_RULES = f"""## 「原文」写法（# 原文 章节内）
 
 **步骤 A — 识别类型**（在心里完成，可在第一段用一句括注类型，如「（类型：教程）」）
 判断视频属于：教程 / 访谈 / 演讲 / 讨论 / 新闻时评 / 财经分析 / 新闻串讲，后续分段侧重须匹配该类型。
 
-**步骤 B — 纠错与整理**
-- 若转写主体为非中文，先按「非中文转写处理」规则全文译为简体中文，再执行下列纠错与整理。
-- 识别因同音/近音字造成的错字。判断方法：仅当某个字/词单独替换为同音或形近字后，句子在语法和语义上都成立，且不需要增删、调整其他任何文字时，才进行替换。
-- 严格限制为"一字换一字"或"一词换一词"的等长同音替换，禁止：
-  1. 增加或删除任何字词（哪怕是为了让句子更通顺、更完整）
-  2. 调整语序
-  3. 补全省略的成分
-  4. 将口语化表达"规范化"或"书面化"
-- 如果一句话需要增删字词、调整结构才能讲通，说明这不是同音错字问题，应保留原文不改动。
-- 重点关注以下高频混淆类型：
-  1. 同音异义词混淆（如"被/背"、"在/再"、"做/作"）
-  2. 专有名词音译错误（人名、地名、品牌、术语，如"乔布斯"→"桥步死"）
-  3. 习惯搭配错误中的单字误替（固定短语中某一字被同音字替换，导致整个短语不成立，如"一以贯之"被识别成"以一贯之"）
-  4. 虚词误用（"的/地/得"等轻声字混淆）
-- 对每处疑似错字，先确认上下文是否提供了足够线索支持修改；若不确定，保留原文，不做臆测性修改。
-- 除纠错外尽量不要改动原文用词，即使原文口语化程度很高也不要改动（如「这个东西啊，我觉得呢，就是说……」），保持原文风格和表达习惯，忠实反映说话人原意。
-- 按语义分段，段落清晰。
+{TRUSTED_TRANSCRIPT_RULES}
 
 
 **步骤 C — 章节划分原则**
@@ -258,6 +260,18 @@ def render_polish_system(
 ) -> str:
     """Combine editable polish instructions with editable recommendation criteria."""
     template = (prompt_template or "").strip()
+    # Existing installations persist the old default prompt in settings.json.
+    # Upgrade only its obsolete correction block while retaining all user edits.
+    legacy_start = "**步骤 B — 纠错与整理**"
+    next_section = "**步骤 C — 章节划分原则**"
+    start = template.find(legacy_start)
+    end = template.find(next_section, start + len(legacy_start)) if start >= 0 else -1
+    if start >= 0 and end > start:
+        template = template[:start] + TRUSTED_TRANSCRIPT_RULES + template[end:]
+    template = template.replace(
+        "翻译完成后再做纠错、分段与润色。",
+        "翻译完成后再做总结与章节整理。",
+    )
     criteria = (recommendation_criteria or "").strip()
     placeholder = "{{recommendation_criteria}}"
     if placeholder in template:
@@ -286,7 +300,7 @@ def build_polish_user_message(raw_text: str) -> str:
 
 {ORIGINAL_SECTION_USER_HINT}
 
-### 转文字结果 ###
+### 可信逐字稿 ###
 {text}"""
 
 

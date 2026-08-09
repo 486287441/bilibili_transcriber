@@ -123,6 +123,7 @@ def polish_with_progress(
     url: str,
     task_id: str,
     open_browser: bool,
+    input_is_trusted: bool = False,
 ) -> tuple[bool, str | None]:
     from pipeline import publish_or_fallback_result
 
@@ -156,6 +157,7 @@ def polish_with_progress(
             url=url,
             open_browser=open_browser,
             task_id=task_id,
+            input_is_trusted=input_is_trusted,
         )
     finally:
         done.set()
