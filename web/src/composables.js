@@ -119,7 +119,7 @@ export function useSmoothEta(progressRef) {
   return { displayEta }
 }
 
-/** Compact top-bar progress while SenseVoice model loads (history-based ETA). */
+/** Compact top-bar progress while the ASR model loads (history-based ETA). */
 export function useModelLoadProgress(statusRef) {
   const display = ref(0)
   const visible = ref(false)

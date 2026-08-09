@@ -1,6 +1,6 @@
 # GPU 转写（RTX 等）：先装 CUDA 版 PyTorch，再装其余依赖
 #   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-funasr
+funasr>=1.3.26
 modelscope
 sentencepiece==0.2.0
 yt-dlp[default]

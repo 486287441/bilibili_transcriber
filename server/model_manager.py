@@ -1,4 +1,4 @@
-"""SenseVoice model lazy/eager loading, idle unload, and GPU release."""
+"""ASR model lazy/eager loading, idle unload, and GPU release."""
 
 from __future__ import annotations
 
@@ -93,15 +93,15 @@ def get_model(*, emit_event: bool = True):
             return _model
         _loading = True
         _load_started_at = time.monotonic()
-        logger.info("正在加载 SenseVoice 模型…")
+        logger.info("正在加载 Fun-ASR-Nano-2512 模型…")
 
         from server import progress_db
 
         try:
-            from bilibili_transcriber import DEVICE, load_sensevoice_model
+            from bilibili_transcriber import DEVICE, load_asr_model
         except ImportError:
             DEVICE = "cpu"
-            from bilibili_transcriber import load_sensevoice_model
+            from bilibili_transcriber import load_asr_model
 
         warm_device_cache(DEVICE)
 
@@ -113,7 +113,7 @@ def get_model(*, emit_event: bool = True):
             )
         start = time.monotonic()
         try:
-            loaded = load_sensevoice_model()
+            loaded = load_asr_model()
             elapsed = time.monotonic() - start
             if elapsed > LOAD_TIMEOUT_SEC:
                 raise TimeoutError("模型加载超时")
@@ -122,7 +122,7 @@ def get_model(*, emit_event: bool = True):
             from server.model_lifecycle import record_loaded
 
             record_loaded()
-            logger.info("SenseVoice 模型加载完成 (%.1fs)", elapsed)
+            logger.info("Fun-ASR-Nano-2512 模型加载完成 (%.1fs)", elapsed)
             if emit_event:
                 _emit("model.loaded", {"load_sec": round(elapsed, 1)})
             return _model
@@ -147,7 +147,7 @@ def unload_model(*, emit_event: bool = False, unload_source: str = "unload") -> 
     with _model_lock:
         if _model is None:
             return False
-        logger.info("正在卸载 SenseVoice 模型并释放显存")
+        logger.info("正在卸载 Fun-ASR-Nano-2512 模型并释放显存")
         _model = None
         try:
             import torch

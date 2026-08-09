@@ -66,9 +66,9 @@ def test_model_load_failure_is_recoverable() -> None:
     try:
         transcriber.AutoModel = lambda **_kwargs: (_ for _ in ()).throw(ValueError("test failure"))
         try:
-            transcriber.load_sensevoice_model()
+            transcriber.load_asr_model()
         except RuntimeError as exc:
-            assert "SenseVoice" in str(exc), exc
+            assert "Fun-ASR-Nano-2512" in str(exc), exc
         else:
             raise AssertionError("model-load failure should raise RuntimeError")
     finally:

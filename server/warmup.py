@@ -9,7 +9,7 @@ logger = logging.getLogger("server.warmup")
 
 
 def warmup_pytorch() -> str:
-    """Import PyTorch and touch CUDA — does not load SenseVoice weights."""
+    """Import PyTorch and touch CUDA without loading ASR weights."""
     t0 = time.monotonic()
     import torch
 

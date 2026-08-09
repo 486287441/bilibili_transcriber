@@ -17,7 +17,7 @@ logger = logging.getLogger("server.model_lifecycle")
 _PATH = config.PROJECT_ROOT / "data" / "model_lifecycle.json"
 _LOG_PATH = config.PROJECT_ROOT / "logs" / "server.log"
 _LOG_TS_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*正在卸载 SenseVoice 模型"
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*正在卸载 .*?模型"
 )
 _lock = threading.Lock()
 

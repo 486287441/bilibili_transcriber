@@ -482,18 +482,22 @@ def _download_video_audio(url, *, site: str, progress_hook=None, download_stem: 
 
 
 # ==========================================
-# SenseVoice 核心逻辑
+# Fun-ASR-Nano 核心逻辑
 # ==========================================
 
 
-def load_sensevoice_model():
-    """初始化阿里 SenseVoiceSmall 组合模型"""
-    print(f"⏳ 正在预加载 SenseVoiceSmall (路径: {MODEL_CACHE_DIR})...")
+ASR_MODEL_ID = "FunAudioLLM/Fun-ASR-Nano-2512"
+ASR_MODEL_NAME = "Fun-ASR-Nano-2512"
+
+
+def load_asr_model():
+    """初始化 Fun-ASR-Nano 与 VAD 组合模型。"""
+    print(f"⏳ 正在预加载 {ASR_MODEL_NAME} (路径: {MODEL_CACHE_DIR})...")
     try:
         model = AutoModel(
-            model="iic/SenseVoiceSmall",
+            model=ASR_MODEL_ID,
             vad_model="iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
-            punc_model="iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
+            vad_kwargs={"max_single_segment_time": 30000},
             device=DEVICE,
             disable_update=True,
             hub="ms",
@@ -503,21 +507,21 @@ def load_sensevoice_model():
         print(f"❌ 模型加载失败: {e}")
         # This function is also called from the web worker.  Exiting here
         # kills that worker thread and leaves its queue task stuck in progress.
-        raise RuntimeError(f"SenseVoice 模型加载失败: {e}") from e
+        raise RuntimeError(f"{ASR_MODEL_NAME} 模型加载失败: {e}") from e
 
 
 def transcribe_offline(audio_path, model):
     """离线转录函数"""
     start_time = time.time()
-    print(f"📝 [转写] SenseVoice 处理中...")
+    print(f"📝 [转写] {ASR_MODEL_NAME} 处理中...")
 
     try:
         res = model.generate(
             input=audio_path,
             cache={},
-            language="zh",
-            use_itn=True,
-            batch_size_s=120,
+            language="中文",
+            itn=True,
+            batch_size=1,
         )
 
         if res and len(res) > 0:
@@ -605,7 +609,7 @@ def main():
     )
     print(f" 运行设备: {DEVICE.upper()} ({device_name})")
 
-    model = load_sensevoice_model()
+    model = load_asr_model()
 
     last_clip = ""
     print(

@@ -116,7 +116,7 @@ const modelStatus = computed(() => {
     return {
       text: '模型加载中…',
       variant: 'busy',
-      title: 'SenseVoice 正在载入显存',
+      title: 'Fun-ASR-Nano 正在载入显存',
     }
   }
   if (s.model_loaded) {
