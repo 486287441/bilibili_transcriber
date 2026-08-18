@@ -9,7 +9,8 @@
         <input v-model="query" placeholder="搜索标题或 URL…" @keyup.enter="search" />
         <button type="button" @click="search">搜索</button>
       </div>
-      <table v-if="items.length" class="history-table">
+      <div v-if="items.length" class="history-table-scroll">
+        <table class="history-table">
         <colgroup>
           <col class="col-title" />
           <col class="col-site" />
@@ -46,6 +47,10 @@
                   class="fail-reason"
                   :title="item.error_message"
                 >{{ failReason(item) }}</span>
+                <span
+                  class="route-badge history-route-badge"
+                  :data-route="item.resolved_route || item.requested_route || 'asr'"
+                >{{ transcriptionRouteLabel(item) }}</span>
               </span>
             </td>
             <td>
@@ -77,12 +82,36 @@
                   type="button"
                   @click="openDoc(item.output_doc_url)"
                 >详情</button>
+                <div v-if="item.status === 'completed'" class="reprocess-control">
+                  <select
+                    v-model="routeSelections[item.id]"
+                    :aria-label="`为${item.title || '该视频'}选择重跑路线`"
+                    :disabled="reprocessingIds.has(item.id)"
+                  >
+                    <option :value="undefined" disabled>换路线…</option>
+                    <option
+                      v-for="option in reprocessRouteOptions"
+                      :key="option.value"
+                      :value="option.value"
+                      :disabled="isCurrentRoute(item, option.value)"
+                    >
+                      {{ option.label }}{{ isCurrentRoute(item, option.value) ? '（当前）' : '' }}
+                    </option>
+                  </select>
+                  <button
+                    type="button"
+                    class="ghost reprocess-button"
+                    :disabled="!routeSelections[item.id] || reprocessingIds.has(item.id)"
+                    @click="requestReprocess(item)"
+                  >{{ reprocessingIds.has(item.id) ? '加入中…' : '重跑' }}</button>
+                </div>
                 <button type="button" class="danger" @click="$emit('delete', item.id)">删除</button>
               </div>
             </td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
       <p v-else class="empty">暂无历史</p>
       <div v-if="total > pageSize" class="pager">
         <button :disabled="page <= 1" @click="$emit('page', page - 1)">上一页</button>
@@ -97,7 +126,14 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { STATUS_LABELS, siteLabelFor, taskFailReason } from '../composables.js'
+import {
+  STATUS_LABELS,
+  TRANSCRIPTION_ROUTE_OPTIONS,
+  effectiveTranscriptionRoute,
+  siteLabelFor,
+  taskFailReason,
+  transcriptionRouteLabel,
+} from '../composables.js'
 import TaskLabel from './TaskLabel.vue'
 import FollowUpDialog from './FollowUpDialog.vue'
 import RecommendationDialog from './RecommendationDialog.vue'
@@ -109,13 +145,23 @@ const props = defineProps({
   pageSize: { type: Number, default: 20 },
   collapsed: { type: Boolean, default: false },
   evaluatingIds: { type: Set, default: () => new Set() },
+  reprocessingIds: { type: Set, default: () => new Set() },
 })
 
-const emit = defineEmits(['search', 'page', 'delete', 'evaluate-recommendation', 'toggle-collapse'])
+const emit = defineEmits([
+  'search',
+  'page',
+  'delete',
+  'evaluate-recommendation',
+  'reprocess-route',
+  'toggle-collapse',
+])
 
 const query = ref('')
 const followUpRef = ref(null)
 const recommendationRef = ref(null)
+const routeSelections = ref({})
+const reprocessRouteOptions = TRANSCRIPTION_ROUTE_OPTIONS.filter((option) => option.value !== 'auto')
 
 function failReason(item) {
   return taskFailReason(item)
@@ -154,6 +200,22 @@ function openDoc(url) {
 
 function openFollowUp(item) {
   followUpRef.value?.open(item)
+}
+
+function isCurrentRoute(item, route) {
+  return effectiveTranscriptionRoute(item) === route
+}
+
+function requestReprocess(item) {
+  const requestedRoute = routeSelections.value[item.id]
+  if (!requestedRoute || props.reprocessingIds.has(item.id)) return
+  emit('reprocess-route', {
+    id: item.id,
+    requestedRoute,
+    onSuccess: () => {
+      delete routeSelections.value[item.id]
+    },
+  })
 }
 
 function search() {

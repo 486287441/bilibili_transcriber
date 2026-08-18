@@ -46,6 +46,26 @@ YTDLP_RETRIES = int(os.getenv("YTDLP_RETRIES", "10") or "10")
 YTDLP_FRAGMENT_RETRIES = int(os.getenv("YTDLP_FRAGMENT_RETRIES", "10") or "10")
 YTDLP_NETWORK_RETRIES = int(os.getenv("YTDLP_NETWORK_RETRIES", "3") or "3")
 
+# PaddleOCR PP-OCRv5 video-subtitle route.  ``auto`` lets PaddleOCR choose a
+# local GPU when its PaddlePaddle build supports one, otherwise it uses CPU.
+# Mobile PP-OCRv5 models are used by default because video OCR processes many
+# frames; both names can be switched to the server variants through .env.
+PADDLEOCR_DEVICE = os.getenv("PADDLEOCR_DEVICE", "auto").strip() or "auto"
+PADDLEOCR_DETECTION_MODEL = os.getenv(
+    "PADDLEOCR_DETECTION_MODEL", "PP-OCRv5_mobile_det"
+).strip() or "PP-OCRv5_mobile_det"
+PADDLEOCR_RECOGNITION_MODEL = os.getenv(
+    "PADDLEOCR_RECOGNITION_MODEL", "PP-OCRv5_mobile_rec"
+).strip() or "PP-OCRv5_mobile_rec"
+PADDLEOCR_MIN_SCORE = float(os.getenv("PADDLEOCR_MIN_SCORE", "0.62") or "0.62")
+PADDLEOCR_CROP_RATIO = float(os.getenv("PADDLEOCR_CROP_RATIO", "0.45") or "0.45")
+PADDLEOCR_DETECTION_SAMPLES = int(
+    os.getenv("PADDLEOCR_DETECTION_SAMPLES", "12") or "12"
+)
+PADDLEOCR_FRAME_INTERVAL_SEC = float(
+    os.getenv("PADDLEOCR_FRAME_INTERVAL_SEC", "1.0") or "1.0"
+)
+
 
 def _parse_browser_spec(spec: str) -> tuple[str, ...] | None:
     """Parse 'chrome' or 'chrome:Default' into yt-dlp cookiesfrombrowser tuple."""

@@ -45,8 +45,22 @@ class HistoryService:
             output_text_path=task.output_text_path,
             local_audio_path=local_audio_path,
             error_message=task.error_message,
+            requested_route=task.requested_route,
+            resolved_route=task.resolved_route,
+            route_diagnostics=task.route_diagnostics,
+            raw_text_path=task.raw_text_path,
+            source_segments_path=task.source_segments_path,
+            parent_history_id=task.history_source_id,
         )
-        self._broadcast("history.created", {"id": row.id, "task_id": task.id, "status": row.status})
+        self._broadcast(
+            "history.created",
+            {
+                "id": row.id,
+                "task_id": task.id,
+                "status": row.status,
+                "parent_history_id": row.parent_history_id,
+            },
+        )
         return row
 
     def get(self, history_id: str) -> HistoryRow:
@@ -85,7 +99,12 @@ class HistoryService:
         history_db.delete_history(history_id)
         if remove_files:
             delete_polished(row.task_id)
-            for path in (row.local_audio_path, row.output_text_path):
+            for path in (
+                row.local_audio_path,
+                row.output_text_path,
+                row.raw_text_path,
+                row.source_segments_path,
+            ):
                 if path and os.path.isfile(path):
                     try:
                         os.remove(path)

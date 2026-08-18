@@ -276,13 +276,28 @@ button.danger:hover:not(:disabled) {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+.add-form .route-select {
+  width: 112px;
+  flex-shrink: 0;
+  padding: 9px 28px 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--parchment);
+  color: var(--dark-warm);
+  font-family: var(--latin-ui);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
 .add-form input::placeholder,
 .toolbar input::placeholder {
   color: var(--stone);
 }
 
 .add-form input:focus,
-.toolbar input:focus {
+.toolbar input:focus,
+.add-form .route-select:focus {
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--brand-tint);
@@ -339,6 +354,14 @@ button.danger:hover:not(:disabled) {
 
 .info .task-label {
   max-width: 100%;
+}
+
+.task-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  margin-top: 3px;
 }
 
 .task-label {
@@ -408,6 +431,31 @@ a.task-url:hover {
 
 .badge[data-status='failed'] {
   color: var(--err);
+}
+
+.route-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-tint);
+  color: var(--brand);
+  font-family: var(--latin-ui);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.55;
+  white-space: nowrap;
+}
+
+.route-badge[data-route='auto'] {
+  background: var(--warm-sand);
+  color: var(--olive);
+}
+
+.route-badge[data-route='subtitle'] {
+  background: var(--ok-tint);
+  color: var(--ok);
 }
 
 .fail-reason {
@@ -644,6 +692,8 @@ button.recommendation-pill:disabled {
 
 .meta {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   color: var(--stone);
   font-size: 13px;
@@ -855,9 +905,48 @@ button.recommendation-pill:disabled {
 
 .history-panel .history-table td:last-child .actions {
   text-align: left;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  white-space: nowrap;
+  white-space: normal;
+}
+
+.history-route-badge {
+  margin-top: 4px;
+}
+
+.reprocess-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.reprocess-control select {
+  width: 98px;
+  height: 27px;
+  padding: 2px 22px 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--parchment);
+  color: var(--dark-warm);
+  font-family: var(--latin-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.reprocess-control select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand-tint);
+}
+
+.reprocess-control select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.actions .reprocess-button {
+  padding-right: 9px;
+  padding-left: 9px;
 }
 
 .history-panel .history-table tbody tr:hover {
@@ -1011,6 +1100,54 @@ dialog.modal-backdrop-in::backdrop {
 @media (prefers-reduced-motion: reduce) {
   dialog::backdrop {
     transition: none;
+  }
+}
+
+@media (max-width: 900px) {
+  body {
+    min-width: 0;
+  }
+
+  .app {
+    padding: 20px 14px 40px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .card {
+    padding: 18px 16px;
+  }
+
+  .add-form {
+    flex-wrap: wrap;
+  }
+
+  .add-form input {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .add-form .route-select {
+    flex: 1;
+    width: auto;
+  }
+
+  .history-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .history-panel .history-table {
+    min-width: 860px;
   }
 }
 

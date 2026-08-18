@@ -16,6 +16,7 @@ from server.history_service import history_service
 from server.idle_manager import idle_manager
 from server.metadata import schedule_metadata_fetch
 from server.pipeline_runner import (
+    download_video_with_progress,
     download_with_progress,
     polish_with_progress,
     transcribe_with_progress,
@@ -26,11 +27,21 @@ from server.progress_tracker import progress_tracker
 from server.queue_db import TaskRow
 from server.queue_service import TaskNotFoundError, queue_service
 from server.runtime import set_processing, set_worker_state
+from server.transcript_routes import (
+    TranscriptRouteUnavailable,
+    TranscriptSegment,
+    normalize_requested_route,
+    save_transcript_artifacts,
+)
 from server.websocket_manager import ws_manager
 
 logger = logging.getLogger("server.worker")
 
 _QUEUE_LOG_PATH = config.PROJECT_ROOT / "downloads" / "queue_events.log"
+
+
+class _TaskCancelled(RuntimeError):
+    pass
 
 
 class WorkerService:
@@ -72,6 +83,11 @@ class WorkerService:
         return "idle"
 
     def start(self) -> None:
+        # On Windows, load Torch's native runtime before a pending OCR task can
+        # load Paddle.  Both frameworks work in this order; Paddle-first can
+        # make Torch's shm.dll fail to resolve.  This imports no ASR weights.
+        import torch  # noqa: F401
+
         queue_service.set_metadata_hook(self._schedule_metadata)
         queue_service.initialize()
         if self._thread and self._thread.is_alive():
@@ -132,27 +148,87 @@ class WorkerService:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
-            task = queue_service.claim_next()
+            try:
+                task = queue_service.claim_next()
+            except Exception:
+                logger.exception("Worker 领取队列任务失败；线程将继续运行")
+                self._stop_event.wait(1.0)
+                continue
             if not task:
-                time.sleep(0.5)
+                self._stop_event.wait(0.5)
                 continue
 
             with self._processing_lock:
+                claimed_at = time.monotonic()
                 self._current_task_id = task.id
-                activity.touch()
-                set_processing(True)
-                set_worker_state("busy")
-                self._broadcast_state()
                 try:
+                    activity.touch()
+                    set_processing(True)
+                    set_worker_state("busy")
+                    self._broadcast_state()
                     self._process_task(task)
+                except Exception as exc:
+                    # _process_task contains route-level handling, but setup,
+                    # persistence, and finalization code can still fail.  One
+                    # bad row must never terminate the sole queue worker.
+                    logger.exception("Worker 顶层捕获未处理异常 task_id=%s", task.id)
+                    self._recover_unhandled_task(task, exc, started_at=claimed_at)
                 finally:
                     self._current_task_id = None
-                    queue_service.clear_cancel(task.id)
-                    progress_tracker.clear_task(task.id)
-                    set_processing(False)
-                    set_worker_state("idle")
-                    activity.touch()
-                    self._broadcast_state()
+                    cleanup_steps = (
+                        ("clear_cancel", lambda: queue_service.clear_cancel(task.id)),
+                        ("clear_progress", lambda: progress_tracker.clear_task(task.id)),
+                        ("processing_flag", lambda: set_processing(False)),
+                        ("worker_state", lambda: set_worker_state("idle")),
+                        ("activity", activity.touch),
+                        ("broadcast", self._broadcast_state),
+                    )
+                    for label, cleanup in cleanup_steps:
+                        try:
+                            cleanup()
+                        except Exception:
+                            logger.exception(
+                                "Worker 收尾步骤失败 task_id=%s step=%s",
+                                task.id,
+                                label,
+                            )
+
+    def _recover_unhandled_task(
+        self,
+        task: TaskRow,
+        error: Exception,
+        *,
+        started_at: float,
+    ) -> None:
+        """Best-effort recovery for exceptions escaping the route pipeline."""
+
+        try:
+            current = queue_service.get(task.id)
+        except TaskNotFoundError:
+            return
+        except Exception:
+            logger.exception("读取异常任务状态失败 task_id=%s", task.id)
+            return
+
+        try:
+            if current.status in {"downloading", "transcribing"} and self._check_cancelled(
+                current
+            ):
+                return
+            if current.status in {"completed", "failed"}:
+                final = current
+            elif current.status in {"pending", "downloading", "transcribing", "polishing"}:
+                final = queue_service.handle_failure(task.id, str(error))
+            else:
+                return
+            self._finalize_task(
+                task,
+                final,
+                started_at=started_at,
+                audio_file=None,
+            )
+        except Exception:
+            logger.exception("恢复异常任务失败 task_id=%s", task.id)
 
     def _check_cancelled(self, task: TaskRow) -> bool:
         if not queue_service.is_cancel_requested(task.id):
@@ -162,6 +238,15 @@ class WorkerService:
             current = queue_service.get(task.id)
             old_status = current.status
             queue_service.transition(task.id, "cancelled")
+            for artifact in (
+                current.raw_text_path,
+                current.source_segments_path,
+            ):
+                if artifact and os.path.isfile(artifact):
+                    try:
+                        os.remove(artifact)
+                    except OSError:
+                        logger.warning("取消任务时清理产物失败: %s", artifact)
             from server import queue_db
 
             queue_db.delete_task(task.id)
@@ -188,30 +273,164 @@ class WorkerService:
         audio_file: str | None,
     ) -> None:
         elapsed = time.monotonic() - started_at
+        archived = final.status not in {"completed", "failed"}
         if final.status in {"completed", "failed"}:
-            history_service.archive_task(
-                final,
-                processing_duration_sec=round(elapsed, 2),
-                local_audio_path=None,
-            )
-        if final.status == "completed":
-            progress_tracker.complete_task(task.id)
             try:
-                queue_service.delete(task.id)
-            except TaskNotFoundError:
-                pass
-        self._append_queue_log("finished", final)
+                history_service.archive_task(
+                    final,
+                    processing_duration_sec=round(elapsed, 2),
+                    local_audio_path=None,
+                )
+                archived = True
+            except Exception:
+                # For a completed task, retain the queue row.  initialize()
+                # will idempotently archive and remove it after a restart.
+                archived = False
+                logger.exception("任务历史归档失败 task_id=%s", task.id)
+        if final.status == "completed":
+            try:
+                progress_tracker.complete_task(task.id)
+            except Exception:
+                logger.exception("完成进度收尾失败 task_id=%s", task.id)
+            if archived:
+                try:
+                    queue_service.delete(task.id)
+                except TaskNotFoundError:
+                    pass
+                except Exception:
+                    logger.exception("删除已归档队列任务失败 task_id=%s", task.id)
+        try:
+            self._append_queue_log("finished", final)
+        except Exception:
+            logger.exception("写入队列完成日志失败 task_id=%s", task.id)
+
+    @staticmethod
+    def _metadata_values(task: TaskRow, meta: dict | None) -> tuple[str, str, float | None]:
+        meta = meta or {}
+        title = str(meta.get("title") or task.title or "未命名视频").strip()
+        url = str(meta.get("url") or meta.get("webpage_url") or task.url).strip()
+        duration = meta.get("duration", meta.get("duration_sec", task.duration_sec))
+        try:
+            duration_sec = float(duration) if duration is not None else task.duration_sec
+        except (TypeError, ValueError):
+            duration_sec = task.duration_sec
+        return title, url, duration_sec
+
+    def _apply_metadata(self, task: TaskRow, meta: dict | None) -> tuple[TaskRow, dict]:
+        title, url, duration_sec = self._metadata_values(task, meta)
+        task = queue_service.update_metadata(
+            task.id,
+            title=title,
+            duration_sec=duration_sec,
+        )
+        return task, {"title": title, "url": url, "duration": duration_sec}
+
+    def _ensure_transcribing(self, task_id: str) -> TaskRow:
+        current = queue_service.get(task_id)
+        if current.status == "downloading":
+            return queue_service.transition(task_id, "transcribing")
+        return current
+
+    @staticmethod
+    def _progress_callback(task_id: str, *, start: float = 0.0, span: float = 100.0):
+        def update(percent: float, detail: dict) -> None:
+            progress_tracker.update(
+                task_id,
+                phase_progress=start + max(0.0, min(100.0, percent)) * span / 100.0,
+                detail=detail,
+            )
+
+        return update
+
+    def _run_asr_route(
+        self,
+        task: TaskRow,
+        *,
+        meta: dict,
+        diagnostics: dict,
+        phase_times: dict[str, float],
+        audio_file: str | None = None,
+    ) -> tuple[list[TranscriptSegment], TaskRow, dict, str]:
+        """Run the existing Fun-ASR-Nano path without changing model behavior."""
+
+        if not audio_file or not os.path.isfile(audio_file):
+            t0 = time.monotonic()
+            audio_file, downloaded_meta, download_error = download_with_progress(task.url, task.id)
+            phase_times["download"] = phase_times.get("download", 0.0) + (
+                time.monotonic() - t0
+            )
+            if not (audio_file and os.path.exists(audio_file) and downloaded_meta):
+                raise RuntimeError(download_error or "下载音频失败")
+            task, meta = self._apply_metadata(task, downloaded_meta)
+
+        diagnostics.update(
+            {
+                "resolved_route": "asr",
+                "asr_model": "Fun-ASR-Nano-2512",
+            }
+        )
+        task = queue_service.update_route_details(
+            task.id,
+            resolved_route="asr",
+            route_diagnostics=diagnostics,
+        )
+        task = self._ensure_transcribing(task.id)
+        idle_manager.set_transcribing(True)
+        try:
+            if self._check_cancelled(task):
+                raise _TaskCancelled("任务已取消")
+            t0 = time.monotonic()
+            text = transcribe_with_progress(
+                audio_file,
+                model_manager.get_model(),
+                task.id,
+                duration_sec=task.duration_sec or meta.get("duration"),
+            )
+            phase_times["transcribe"] = phase_times.get("transcribe", 0.0) + (
+                time.monotonic() - t0
+            )
+        finally:
+            idle_manager.set_transcribing(False)
+        if not text:
+            raise RuntimeError("转写失败")
+        duration = task.duration_sec or meta.get("duration") or 0.1
+        return (
+            [
+                TranscriptSegment(
+                    start_sec=0.0,
+                    end_sec=max(0.1, float(duration)),
+                    text=text,
+                    source="asr",
+                )
+            ],
+            task,
+            meta,
+            audio_file,
+        )
 
     def _process_task(self, task: TaskRow) -> None:
         started_mono = time.monotonic()
         phase_times: dict[str, float] = {}
         audio_file: str | None = None
+        media_file: str | None = None
         transcript_dir = config.PROJECT_ROOT / "downloads" / "transcripts"
         transcript_dir.mkdir(parents=True, exist_ok=True)
         text_path = str(transcript_dir / f"{task.id}.txt")
 
+        requested_route = normalize_requested_route(task.requested_route)
+        diagnostics: dict = {
+            "requested_route": requested_route,
+            "decision_mode": "automatic" if requested_route == "auto" else "explicit",
+        }
+
         self._append_queue_log("started", task)
-        logger.info("开始处理 task_id=%s url=%s mode=%s", task.id, task.url, task.reprocess_mode)
+        logger.info(
+            "开始处理 task_id=%s url=%s mode=%s requested_route=%s",
+            task.id,
+            task.url,
+            task.reprocess_mode,
+            requested_route,
+        )
         progress_tracker.start_task(task.id, duration_sec=task.duration_sec)
 
         if self._check_cancelled(task):
@@ -223,75 +442,276 @@ class WorkerService:
                 self._finalize_task(task, final, started_at=started_mono, audio_file=None)
                 return
 
-            meta = {"title": task.title or "未命名视频", "url": task.url}
-
-            if task.reprocess_mode == "transcribe_and_polish" and task.local_audio_path:
-                audio_file = task.local_audio_path
-                if not os.path.isfile(audio_file):
-                    final = queue_service.handle_failure(task.id, "本地音频文件不存在")
-                    self._finalize_task(task, final, started_at=started_mono, audio_file=None)
-                    return
-            else:
-                if task.retry_count > 0:
-                    delay = min(2 ** task.retry_count, 10)
-                    logger.info(
-                        "下载重试退避 task_id=%s retry=%d delay=%ds",
-                        task.id,
-                        task.retry_count,
-                        delay,
-                    )
-                    time.sleep(delay)
-                t0 = time.monotonic()
-                audio_file, meta_dl, dl_error = download_with_progress(task.url, task.id)
-                phase_times["download"] = time.monotonic() - t0
-                if not (audio_file and os.path.exists(audio_file) and meta_dl):
-                    msg = dl_error or "下载音频失败"
-                    logger.error("下载失败 task_id=%s url=%s err=%s", task.id, task.url, msg)
-                    final = queue_service.handle_failure(task.id, msg)
-                    self._finalize_task(task, final, started_at=started_mono, audio_file=audio_file)
-                    return
-                meta = meta_dl
-                title = (meta.get("title") or "").strip()
-                if title:
-                    task = queue_service.update_metadata(
-                        task.id,
-                        title=title,
-                        duration_sec=task.duration_sec,
-                    )
-                if self._check_cancelled(task):
-                    self._maybe_cleanup_audio(audio_file)
-                    return
-
-            queue_service.transition(task.id, "transcribing")
-            idle_manager.set_transcribing(True)
-            try:
-                if self._check_cancelled(task):
-                    return
-                t0 = time.monotonic()
-                text = transcribe_with_progress(
-                    audio_file,
-                    model_manager.get_model(),
+            if task.retry_count > 0:
+                delay = min(2 ** task.retry_count, 10)
+                logger.info(
+                    "任务重试退避 task_id=%s retry=%d delay=%ds",
                     task.id,
-                    duration_sec=task.duration_sec or meta.get("duration"),
+                    task.retry_count,
+                    delay,
                 )
-                phase_times["transcribe"] = time.monotonic() - t0
-            finally:
-                idle_manager.set_transcribing(False)
+                time.sleep(delay)
 
-            if not text:
-                final = queue_service.handle_failure(task.id, "转写失败")
-                self._finalize_task(task, final, started_at=started_mono, audio_file=audio_file)
-                return
+            meta = {"title": task.title or "未命名视频", "url": task.url}
+            segments: list[TranscriptSegment] = []
 
-            Path(text_path).write_text(text.strip() + "\n", encoding="utf-8")
-            from server import queue_db
+            # Route 1: official Bilibili CC subtitles.  Non-Bilibili automatic
+            # tasks retain the old ASR behavior.
+            should_probe_subtitle = requested_route in {"auto", "subtitle"}
+            if should_probe_subtitle:
+                if task.site != "bilibili":
+                    if requested_route == "subtitle":
+                        raise TranscriptRouteUnavailable("B站字幕路线只支持 B 站视频")
+                    diagnostics["platform_subtitle_skipped"] = "non_bilibili_site"
+                else:
+                    from server.bilibili_subtitles import fetch_bilibili_subtitles
 
-            queue_db.update_task_fields(task.id, output_text_path=text_path)
+                    progress_tracker.set_phase(task.id, "download")
+                    progress_tracker.update(
+                        task.id,
+                        phase_progress=3.0,
+                        detail={"message": "正在检测 B 站字幕"},
+                    )
+                    try:
+                        subtitle_result = fetch_bilibili_subtitles(task.url)
+                    except Exception as exc:
+                        if requested_route == "subtitle":
+                            raise RuntimeError(f"B站字幕检测失败: {exc}") from exc
+                        diagnostics["platform_subtitle_probe_error"] = str(exc)[:500]
+                        logger.warning("B站字幕检测失败，自动路线继续: %s", exc)
+                    else:
+                        task, meta = self._apply_metadata(
+                            task,
+                            {
+                                "title": subtitle_result.title,
+                                "url": subtitle_result.webpage_url,
+                                "duration": subtitle_result.duration_sec,
+                            },
+                        )
+                        diagnostics.update(subtitle_result.diagnostics)
+                        if subtitle_result.found:
+                            segments = subtitle_result.segments
+                            diagnostics.update(
+                                {
+                                    "resolved_route": "subtitle",
+                                    "route_reason": "platform_subtitle_available",
+                                }
+                            )
+                            task = queue_service.update_route_details(
+                                task.id,
+                                resolved_route="subtitle",
+                                route_diagnostics=diagnostics,
+                            )
+                            progress_tracker.update(task.id, phase_progress=100.0)
+                            task = self._ensure_transcribing(task.id)
+                            progress_tracker.set_phase(task.id, "transcribe")
+                            progress_tracker.update(
+                                task.id,
+                                phase_progress=100.0,
+                                detail={"message": "B 站字幕提取完成"},
+                            )
+                        elif requested_route == "subtitle":
+                            raise TranscriptRouteUnavailable(
+                                "该视频没有可用的 B 站字幕（登录 Cookie 可能是必需的）"
+                            )
+
+            # Route 2: hard subtitles detected/extracted by PaddleOCR PP-OCRv5.
+            should_try_ocr = not segments and (
+                requested_route == "ocr"
+                or (requested_route == "auto" and task.site == "bilibili")
+            )
+            if should_try_ocr:
+                t0 = time.monotonic()
+                video_file, video_meta, video_error = download_video_with_progress(
+                    task.url, task.id
+                )
+                phase_times["download"] = phase_times.get("download", 0.0) + (
+                    time.monotonic() - t0
+                )
+                if not (video_file and os.path.isfile(video_file) and video_meta):
+                    if requested_route == "ocr":
+                        raise RuntimeError(video_error or "下载 OCR 视频失败")
+                    diagnostics["ocr_video_download_error"] = video_error or "下载视频失败"
+                    logger.warning("OCR 视频下载失败，自动路线回落 ASR: %s", video_error)
+                else:
+                    media_file = video_file
+                    task, meta = self._apply_metadata(task, video_meta)
+                    task = self._ensure_transcribing(task.id)
+                    progress_tracker.set_phase(task.id, "transcribe")
+                    progress_tracker.update(
+                        task.id,
+                        phase_progress=1.0,
+                        detail={"message": "正在加载 PaddleOCR PP-OCRv5"},
+                    )
+
+                    from server.video_ocr import (
+                        OCRExtractionCancelled,
+                        PaddleOCRUnavailable,
+                        PaddleOCRV5Processor,
+                        detect_hard_subtitles,
+                        extract_audio_from_video,
+                        extract_ocr_segments,
+                    )
+
+                    processor = None
+                    t0 = time.monotonic()
+                    try:
+                        ocr_device = str(config.PADDLEOCR_DEVICE).lower()
+                        paddle_uses_gpu = ocr_device.startswith("gpu")
+                        if ocr_device == "auto":
+                            try:
+                                import paddle
+
+                                paddle_uses_gpu = paddle.device.is_compiled_with_cuda()
+                            except Exception:
+                                paddle_uses_gpu = False
+                        if paddle_uses_gpu:
+                            model_manager.unload_model(
+                                emit_event=True,
+                                unload_source="ocr_route",
+                            )
+                        processor = PaddleOCRV5Processor()
+                        use_ocr = requested_route == "ocr"
+                        if requested_route == "auto":
+                            detection = detect_hard_subtitles(
+                                video_file,
+                                processor,
+                                duration_sec=task.duration_sec,
+                                progress=self._progress_callback(task.id, start=1.0, span=24.0),
+                                cancelled=lambda: self._stop_event.is_set()
+                                or queue_service.is_cancel_requested(task.id),
+                            )
+                            diagnostics.update(detection.to_dict())
+                            use_ocr = detection.found
+                            diagnostics["route_reason"] = (
+                                "hard_subtitle_detected"
+                                if use_ocr
+                                else "no_hard_subtitle_detected"
+                            )
+
+                        if use_ocr:
+                            diagnostics["resolved_route"] = "ocr"
+                            task = queue_service.update_route_details(
+                                task.id,
+                                resolved_route="ocr",
+                                route_diagnostics=diagnostics,
+                            )
+                            ocr_start = 25.0 if requested_route == "auto" else 1.0
+                            ocr_span = 75.0 if requested_route == "auto" else 99.0
+                            segments, ocr_diagnostics = extract_ocr_segments(
+                                video_file,
+                                processor,
+                                progress=self._progress_callback(
+                                    task.id, start=ocr_start, span=ocr_span
+                                ),
+                                cancelled=lambda: self._stop_event.is_set()
+                                or queue_service.is_cancel_requested(task.id),
+                            )
+                            diagnostics.update(ocr_diagnostics)
+                            if not segments:
+                                if requested_route == "ocr":
+                                    raise TranscriptRouteUnavailable(
+                                        "PP-OCRv5 未从画面底部识别到可用字幕"
+                                    )
+                                diagnostics["ocr_fallback_reason"] = "empty_ocr_result"
+                    except OCRExtractionCancelled as exc:
+                        raise _TaskCancelled(str(exc)) from exc
+                    except PaddleOCRUnavailable as exc:
+                        if requested_route == "ocr":
+                            raise TranscriptRouteUnavailable(str(exc)) from exc
+                        diagnostics["ocr_unavailable"] = str(exc)[:500]
+                        logger.warning("PP-OCRv5 不可用，自动路线回落 ASR: %s", exc)
+                    except TranscriptRouteUnavailable:
+                        raise
+                    except Exception as exc:
+                        if requested_route == "ocr":
+                            raise RuntimeError(f"PP-OCRv5 处理失败: {exc}") from exc
+                        diagnostics["ocr_processing_error"] = str(exc)[:500]
+                        logger.warning("PP-OCRv5 处理失败，自动路线回落 ASR: %s", exc)
+                    finally:
+                        if processor is not None:
+                            processor.close()
+                        phase_times["transcribe"] = phase_times.get("transcribe", 0.0) + (
+                            time.monotonic() - t0
+                        )
+
+                    if not segments and requested_route == "auto":
+                        progress_tracker.update(
+                            task.id,
+                            phase_progress=30.0,
+                            detail={"message": "画面无可用字幕，正在提取音频"},
+                        )
+                        try:
+                            audio_file = extract_audio_from_video(
+                                video_file,
+                                task.id,
+                                cancelled=lambda: self._stop_event.is_set()
+                                or queue_service.is_cancel_requested(task.id),
+                            )
+                        except OCRExtractionCancelled as exc:
+                            raise _TaskCancelled(str(exc)) from exc
+                        except Exception as exc:
+                            # Keep the original ASR downloader as the final
+                            # compatibility fallback when the inspection video
+                            # happens to contain no usable audio stream.
+                            diagnostics["video_audio_extract_error"] = str(exc)[:500]
+                            audio_file = None
+
+            # Route 3: the original audio download + Fun-ASR-Nano path.  It is
+            # also the automatic fallback for non-Bilibili videos and for B站
+            # videos without usable soft/hard subtitles.
+            if not segments:
+                if requested_route in {"subtitle", "ocr"}:
+                    raise TranscriptRouteUnavailable("所选路线没有生成可用文本")
+                if (
+                    task.reprocess_mode == "transcribe_and_polish"
+                    and task.local_audio_path
+                    and os.path.isfile(task.local_audio_path)
+                ):
+                    audio_file = task.local_audio_path
+                segments, task, meta, audio_file = self._run_asr_route(
+                    task,
+                    meta=meta,
+                    diagnostics=diagnostics,
+                    phase_times=phase_times,
+                    audio_file=audio_file,
+                )
 
             if self._check_cancelled(task):
                 return
 
-            queue_service.transition(task.id, "polishing")
+            resolved_route = queue_service.get(task.id).resolved_route
+            if not resolved_route:
+                raise RuntimeError("文本路线没有完成解析")
+            diagnostics["resolved_route"] = resolved_route
+            diagnostics["source_segment_count"] = len(segments)
+            raw_text_path, source_segments_path, normalized_segments = (
+                save_transcript_artifacts(
+                    task.id,
+                    segments,
+                    diagnostics=diagnostics,
+                )
+            )
+            text = "\n".join(segment.text for segment in normalized_segments).strip()
+            if not text:
+                raise TranscriptRouteUnavailable("所选路线没有生成可用文本")
+            task = queue_service.update_route_details(
+                task.id,
+                resolved_route=resolved_route,
+                route_diagnostics=diagnostics,
+                raw_text_path=raw_text_path,
+                source_segments_path=source_segments_path,
+            )
+
+            if self._check_cancelled(task):
+                return
+
+            task = queue_service.transition(task.id, "polishing")
+            # Close the transcribe->publish cancellation race.  Once this
+            # checkpoint passes, QueueService rejects new polishing cancels so
+            # an externally published document cannot become an orphan.
+            if self._check_cancelled(task):
+                return
             t0 = time.monotonic()
             ok, doc_url = polish_with_progress(
                 text,
@@ -308,24 +728,55 @@ class WorkerService:
                 return
 
             final = queue_service.complete(task.id, doc_url=doc_url or "", text_path=text_path)
-            logger.info("处理完成 task_id=%s doc=%s", task.id, doc_url)
-
-            progress_db.record_stats(
-                task_id=task.id,
-                duration_sec=task.duration_sec,
-                download_sec=phase_times.get("download", 0.0),
-                transcribe_sec=phase_times.get("transcribe", 0.0),
-                polish_sec=phase_times.get("polish", 0.0),
-                polish_chars=len(text),
-                polish_tokens=estimate_input_tokens(len(text)),
+            logger.info(
+                "处理完成 task_id=%s route=%s doc=%s",
+                task.id,
+                resolved_route,
+                doc_url,
             )
+
+            try:
+                progress_db.record_stats(
+                    task_id=task.id,
+                    duration_sec=task.duration_sec,
+                    download_sec=phase_times.get("download", 0.0),
+                    transcribe_sec=phase_times.get("transcribe", 0.0),
+                    polish_sec=phase_times.get("polish", 0.0),
+                    polish_chars=len(text),
+                    polish_tokens=estimate_input_tokens(len(text)),
+                )
+            except Exception:
+                # Metrics are observational.  Never turn a successfully
+                # published document back into a retryable task.
+                logger.exception("记录处理统计失败 task_id=%s", task.id)
             self._finalize_task(task, final, started_at=started_mono, audio_file=audio_file)
+        except _TaskCancelled:
+            self._check_cancelled(task)
+            return
+        except TranscriptRouteUnavailable as exc:
+            logger.warning("文本路线不可用 task_id=%s: %s", task.id, exc)
+            if self._check_cancelled(task):
+                return
+            final = queue_service.fail_permanently(task.id, str(exc))
+            self._finalize_task(
+                task,
+                final,
+                started_at=started_mono,
+                audio_file=media_file or audio_file,
+            )
         except Exception as exc:
             logger.exception("任务处理异常 task_id=%s", task.id)
+            if self._check_cancelled(task):
+                return
             final = queue_service.handle_failure(task.id, str(exc))
-            self._finalize_task(task, final, started_at=started_mono, audio_file=audio_file)
+            self._finalize_task(
+                task,
+                final,
+                started_at=started_mono,
+                audio_file=media_file or audio_file,
+            )
         finally:
-            self._maybe_cleanup_audio(audio_file)
+            self._maybe_cleanup_audio(media_file or audio_file)
 
     def _run_polish_only(self, task: TaskRow, *, text_path: str) -> TaskRow:
         from server.history_db import get_history
@@ -335,7 +786,20 @@ class WorkerService:
         if not path or not os.path.isfile(path):
             return queue_service.handle_failure(task.id, "找不到已存转写文本")
         text = Path(path).read_text(encoding="utf-8")
-        queue_service.transition(task.id, "polishing")
+        inherited_route = (hist.resolved_route if hist else None) or "asr"
+        task = queue_service.update_route_details(
+            task.id,
+            resolved_route=inherited_route,
+            route_diagnostics={
+                "requested_route": task.requested_route,
+                "resolved_route": inherited_route,
+                "route_reason": "polish_only_reused_history_text",
+                "parent_history_id": task.history_source_id,
+            },
+        )
+        task = queue_service.transition(task.id, "polishing")
+        if self._check_cancelled(task):
+            raise _TaskCancelled("任务已取消")
         ok, doc_url = polish_with_progress(
             text,
             title=task.title or (hist.title if hist else "未命名视频"),
@@ -346,7 +810,7 @@ class WorkerService:
         )
         if not ok:
             return queue_service.handle_failure(task.id, "发布失败（已执行回退流程）")
-        return queue_service.complete(task.id, doc_url=doc_url or "", text_path=path)
+        return queue_service.complete(task.id, doc_url=doc_url or "", text_path=text_path)
 
 
 worker_service = WorkerService()

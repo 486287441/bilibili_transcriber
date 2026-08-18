@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
@@ -11,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 
 import config
+from server.queue_db import RequestedRoute, ResolvedRoute
 from video_urls import canonical_video_key
 
 DB_PATH = config.PROJECT_ROOT / "data" / "queue.db"
@@ -30,7 +32,13 @@ CREATE TABLE IF NOT EXISTS history (
     output_doc_url TEXT,
     output_text_path TEXT,
     local_audio_path TEXT,
-    error_message TEXT
+    error_message TEXT,
+    requested_route TEXT NOT NULL DEFAULT 'asr',
+    resolved_route TEXT,
+    route_diagnostics TEXT,
+    raw_text_path TEXT,
+    source_segments_path TEXT,
+    parent_history_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_history_processed ON history(processed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_history_status ON history(status);
@@ -55,6 +63,12 @@ class HistoryRow:
     output_text_path: str | None
     local_audio_path: str | None
     error_message: str | None
+    requested_route: RequestedRoute = "asr"
+    resolved_route: ResolvedRoute | None = "asr"
+    route_diagnostics: dict[str, Any] | None = None
+    raw_text_path: str | None = None
+    source_segments_path: str | None = None
+    parent_history_id: str | None = None
 
     def to_dict(self, *, include_text: bool = False) -> dict[str, Any]:
         from server.error_summary import summarize_task_error
@@ -74,6 +88,12 @@ class HistoryRow:
             "output_text_path": self.output_text_path,
             "local_audio_path": self.local_audio_path,
             "error_message": self.error_message,
+            "requested_route": self.requested_route,
+            "resolved_route": self.resolved_route,
+            "route_diagnostics": self.route_diagnostics,
+            "raw_text_path": self.raw_text_path,
+            "source_segments_path": self.source_segments_path,
+            "parent_history_id": self.parent_history_id,
         }
         if self.error_message:
             data["error_summary"] = summarize_task_error(self.error_message)
@@ -120,11 +140,27 @@ def init_history() -> None:
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
-    try:
-        conn.execute("ALTER TABLE history ADD COLUMN url_key TEXT")
-    except sqlite3.OperationalError:
-        pass
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(history)")}
+    resolved_route_added = "resolved_route" not in existing
+    for col, typ in (
+        ("url_key", "TEXT"),
+        ("requested_route", "TEXT NOT NULL DEFAULT 'asr'"),
+        ("resolved_route", "TEXT"),
+        ("route_diagnostics", "TEXT"),
+        ("raw_text_path", "TEXT"),
+        ("source_segments_path", "TEXT"),
+        ("parent_history_id", "TEXT"),
+    ):
+        if col not in existing:
+            conn.execute(f"ALTER TABLE history ADD COLUMN {col} {typ}")
+    conn.execute(
+        "UPDATE history SET requested_route = 'asr' "
+        "WHERE requested_route IS NULL OR requested_route = ''"
+    )
+    if resolved_route_added:
+        conn.execute("UPDATE history SET resolved_route = 'asr'")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_history_url_key ON history(url_key)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_history_parent ON history(parent_history_id)")
     rows = conn.execute(
         "SELECT id, url FROM history WHERE url_key IS NULL OR url_key = ''"
     ).fetchall()
@@ -150,6 +186,7 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
 
 
 def _row_from_sql(row: sqlite3.Row) -> HistoryRow:
+    keys = row.keys()
     return HistoryRow(
         id=row["id"],
         task_id=row["task_id"],
@@ -165,7 +202,41 @@ def _row_from_sql(row: sqlite3.Row) -> HistoryRow:
         output_text_path=row["output_text_path"],
         local_audio_path=row["local_audio_path"],
         error_message=row["error_message"],
+        requested_route=(
+            row["requested_route"]
+            if "requested_route" in keys and row["requested_route"]
+            else "asr"
+        ),
+        resolved_route=row["resolved_route"] if "resolved_route" in keys else "asr",
+        route_diagnostics=(
+            _decode_route_diagnostics(row["route_diagnostics"])
+            if "route_diagnostics" in keys
+            else None
+        ),
+        raw_text_path=row["raw_text_path"] if "raw_text_path" in keys else None,
+        source_segments_path=(
+            row["source_segments_path"] if "source_segments_path" in keys else None
+        ),
+        parent_history_id=(
+            row["parent_history_id"] if "parent_history_id" in keys else None
+        ),
     )
+
+
+def _encode_route_diagnostics(value: dict[str, Any] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _decode_route_diagnostics(value: str | None) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        decoded = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
 
 def upsert_from_task(
@@ -182,6 +253,12 @@ def upsert_from_task(
     output_text_path: str | None,
     local_audio_path: str | None,
     error_message: str | None,
+    requested_route: RequestedRoute = "asr",
+    resolved_route: ResolvedRoute | None = "asr",
+    route_diagnostics: dict[str, Any] | None = None,
+    raw_text_path: str | None = None,
+    source_segments_path: str | None = None,
+    parent_history_id: str | None = None,
 ) -> HistoryRow:
     now = _now_iso()
     url_key = canonical_video_key(url)
@@ -195,7 +272,9 @@ def upsert_from_task(
                 UPDATE history SET
                     status=?, processed_at=?, processing_duration_sec=?,
                     output_doc_url=?, output_text_path=?, local_audio_path=?,
-                    error_message=?, title=?, duration_sec=?, url_key=?
+                    error_message=?, title=?, duration_sec=?, url_key=?,
+                    requested_route=?, resolved_route=?, route_diagnostics=?,
+                    raw_text_path=?, source_segments_path=?, parent_history_id=?
                 WHERE task_id=?
                 """,
                 (
@@ -209,6 +288,12 @@ def upsert_from_task(
                     title,
                     duration_sec,
                     url_key,
+                    requested_route,
+                    resolved_route,
+                    _encode_route_diagnostics(route_diagnostics),
+                    raw_text_path,
+                    source_segments_path,
+                    parent_history_id,
                     task_id,
                 ),
             )
@@ -220,8 +305,10 @@ def upsert_from_task(
                 INSERT INTO history (
                     id, task_id, url, title, duration_sec, site, source, status,
                     processed_at, processing_duration_sec, output_doc_url,
-                    output_text_path, local_audio_path, error_message, url_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    output_text_path, local_audio_path, error_message, url_key,
+                    requested_route, resolved_route, route_diagnostics,
+                    raw_text_path, source_segments_path, parent_history_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     hid,
@@ -239,6 +326,12 @@ def upsert_from_task(
                     local_audio_path,
                     error_message,
                     url_key,
+                    requested_route,
+                    resolved_route,
+                    _encode_route_diagnostics(route_diagnostics),
+                    raw_text_path,
+                    source_segments_path,
+                    parent_history_id,
                 ),
             )
         conn.commit()

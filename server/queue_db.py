@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 
 import config
 
 DB_PATH = config.PROJECT_ROOT / "data" / "queue.db"
+
+RequestedRoute = Literal["auto", "subtitle", "ocr", "asr"]
+ResolvedRoute = Literal["subtitle", "ocr", "asr"]
+REQUESTED_ROUTES = frozenset({"auto", "subtitle", "ocr", "asr"})
+RESOLVED_ROUTES = frozenset({"subtitle", "ocr", "asr"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -33,7 +39,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     started_at TEXT,
     completed_at TEXT,
     output_doc_url TEXT,
-    output_text_path TEXT
+    output_text_path TEXT,
+    requested_route TEXT NOT NULL DEFAULT 'auto',
+    resolved_route TEXT,
+    route_diagnostics TEXT,
+    raw_text_path TEXT,
+    source_segments_path TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status_position ON tasks(status, position);
 CREATE INDEX IF NOT EXISTS idx_tasks_url ON tasks(url);
@@ -69,6 +80,11 @@ class TaskRow:
     reprocess_mode: str | None = None
     history_source_id: str | None = None
     local_audio_path: str | None = None
+    requested_route: RequestedRoute = "asr"
+    resolved_route: ResolvedRoute | None = None
+    route_diagnostics: dict[str, Any] | None = None
+    raw_text_path: str | None = None
+    source_segments_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         from server.error_summary import summarize_task_error
@@ -95,6 +111,11 @@ class TaskRow:
             "reprocess_mode": self.reprocess_mode,
             "history_source_id": self.history_source_id,
             "local_audio_path": self.local_audio_path,
+            "requested_route": self.requested_route,
+            "resolved_route": self.resolved_route,
+            "route_diagnostics": self.route_diagnostics,
+            "raw_text_path": self.raw_text_path,
+            "source_segments_path": self.source_segments_path,
         }
         if self.error_message:
             data["error_summary"] = summarize_task_error(self.error_message)
@@ -125,19 +146,61 @@ def _row_from_sql(row: sqlite3.Row) -> TaskRow:
         reprocess_mode=row["reprocess_mode"] if "reprocess_mode" in keys else None,
         history_source_id=row["history_source_id"] if "history_source_id" in keys else None,
         local_audio_path=row["local_audio_path"] if "local_audio_path" in keys else None,
+        requested_route=(
+            row["requested_route"]
+            if "requested_route" in keys and row["requested_route"]
+            else "asr"
+        ),
+        resolved_route=row["resolved_route"] if "resolved_route" in keys else None,
+        route_diagnostics=(
+            _decode_route_diagnostics(row["route_diagnostics"])
+            if "route_diagnostics" in keys
+            else None
+        ),
+        raw_text_path=row["raw_text_path"] if "raw_text_path" in keys else None,
+        source_segments_path=(
+            row["source_segments_path"] if "source_segments_path" in keys else None
+        ),
     )
 
 
+def _encode_route_diagnostics(value: dict[str, Any] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _decode_route_diagnostics(value: str | None) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        decoded = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
 def _migrate_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
+    resolved_route_added = "resolved_route" not in existing
     for col, typ in (
         ("reprocess_mode", "TEXT"),
         ("history_source_id", "TEXT"),
         ("local_audio_path", "TEXT"),
+        ("requested_route", "TEXT NOT NULL DEFAULT 'asr'"),
+        ("resolved_route", "TEXT"),
+        ("route_diagnostics", "TEXT"),
+        ("raw_text_path", "TEXT"),
+        ("source_segments_path", "TEXT"),
     ):
-        try:
+        if col not in existing:
             conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {typ}")
-        except sqlite3.OperationalError:
-            pass
+    conn.execute(
+        "UPDATE tasks SET requested_route = 'asr' "
+        "WHERE requested_route IS NULL OR requested_route = ''"
+    )
+    if resolved_route_added:
+        conn.execute("UPDATE tasks SET resolved_route = 'asr'")
 
 
 def init_db() -> None:
@@ -172,8 +235,10 @@ def insert_task(conn: sqlite3.Connection, task: TaskRow) -> None:
             status, position, retry_count, max_retries, error_message,
             created_at, updated_at, started_at, completed_at,
             output_doc_url, output_text_path,
-            reprocess_mode, history_source_id, local_audio_path
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            reprocess_mode, history_source_id, local_audio_path,
+            requested_route, resolved_route, route_diagnostics,
+            raw_text_path, source_segments_path
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             task.id,
@@ -197,6 +262,11 @@ def insert_task(conn: sqlite3.Connection, task: TaskRow) -> None:
             task.reprocess_mode,
             task.history_source_id,
             task.local_audio_path,
+            task.requested_route,
+            task.resolved_route,
+            _encode_route_diagnostics(task.route_diagnostics),
+            task.raw_text_path,
+            task.source_segments_path,
         ),
     )
 
@@ -246,6 +316,8 @@ def find_active_by_url(url: str) -> TaskRow | None:
 def update_task_fields(task_id: str, **fields: Any) -> TaskRow | None:
     if not fields:
         return get_task(task_id)
+    if "route_diagnostics" in fields:
+        fields["route_diagnostics"] = _encode_route_diagnostics(fields["route_diagnostics"])
     fields["updated_at"] = _now_iso()
     columns = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [task_id]
@@ -255,11 +327,65 @@ def update_task_fields(task_id: str, **fields: Any) -> TaskRow | None:
     return get_task(task_id)
 
 
+def update_task_fields_if_status(
+    task_id: str,
+    expected_status: str,
+    **fields: Any,
+) -> TaskRow | None:
+    """Update one task only while it is still in ``expected_status``.
+
+    State changes must not be implemented as a read followed by an
+    unconditional update: a cancel/claim request can otherwise overwrite a
+    newer worker state.  Returning ``None`` means the row disappeared or its
+    state changed before this compare-and-swap completed.
+    """
+
+    if not fields:
+        task = get_task(task_id)
+        return task if task and task.status == expected_status else None
+    if "route_diagnostics" in fields:
+        fields["route_diagnostics"] = _encode_route_diagnostics(fields["route_diagnostics"])
+    fields["updated_at"] = _now_iso()
+    columns = ", ".join(f"{key} = ?" for key in fields)
+    values = [*fields.values(), task_id, expected_status]
+    with _connect() as conn:
+        cursor = conn.execute(
+            f"UPDATE tasks SET {columns} WHERE id = ? AND status = ?",
+            values,
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        conn.commit()
+        return _row_from_sql(row) if row else None
+
+
 def delete_task(task_id: str) -> bool:
     with _connect() as conn:
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         conn.commit()
         return cur.rowcount > 0
+
+
+def cancel_pending_task(task_id: str) -> TaskRow | None:
+    """Atomically cancel and remove a task only if it is still pending."""
+
+    now = _now_iso()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE tasks
+            SET status = 'cancelled', updated_at = ?, completed_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (now, now, task_id),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        conn.execute("DELETE FROM tasks WHERE id = ? AND status = 'cancelled'", (task_id,))
+        conn.commit()
+        return _row_from_sql(row) if row else None
 
 
 def purge_completed_tasks() -> int:
@@ -326,6 +452,7 @@ def create_pending_task(
     local_audio_path: str | None = None,
     title: str | None = None,
     duration_sec: float | None = None,
+    requested_route: RequestedRoute = "auto",
 ) -> TaskRow:
     now = _now_iso()
     with _connect() as conn:
@@ -352,6 +479,11 @@ def create_pending_task(
             reprocess_mode=reprocess_mode,
             history_source_id=history_source_id,
             local_audio_path=local_audio_path,
+            requested_route=requested_route,
+            resolved_route=None,
+            route_diagnostics=None,
+            raw_text_path=None,
+            source_segments_path=None,
         )
         insert_task(conn, task)
         conn.commit()

@@ -6,6 +6,7 @@
       <TaskLabel class="progress-title" :url="active.url" :title="active.title" link />
       <div class="meta">
         <span v-if="active.duration_sec">时长 {{ formatDuration(active.duration_sec) }}</span>
+        <span class="route-badge" :data-route="routeKind">{{ routeLabel }}</span>
         <span class="phase-tag">{{ phaseLabel }}</span>
       </div>
       <div class="phase-bars">
@@ -34,7 +35,14 @@
 
 <script setup>
 import { computed, toRef } from 'vue'
-import { PHASE_LABELS, formatEta, useSmoothEta, useSmoothPhaseProgress } from '../composables.js'
+import {
+  PHASE_LABELS,
+  formatEta,
+  transcriptionPhaseLabel,
+  transcriptionRouteLabel,
+  useSmoothEta,
+  useSmoothPhaseProgress,
+} from '../composables.js'
 import TaskLabel from './TaskLabel.vue'
 
 const props = defineProps({
@@ -47,13 +55,37 @@ const progressRef = toRef(props, 'progress')
 const { download, transcribe, polish } = useSmoothPhaseProgress(progressRef)
 const { displayEta } = useSmoothEta(progressRef)
 
+const routeState = computed(() => {
+  const progressHasRoute = props.progress && (
+    Object.prototype.hasOwnProperty.call(props.progress, 'requested_route') ||
+    Object.prototype.hasOwnProperty.call(props.progress, 'resolved_route')
+  )
+  const activeHasRoute = props.active && (
+    Object.prototype.hasOwnProperty.call(props.active, 'requested_route') ||
+    Object.prototype.hasOwnProperty.call(props.active, 'resolved_route')
+  )
+  if (!progressHasRoute && !activeHasRoute) return props.active || props.progress || {}
+  return {
+    requested_route: props.progress?.requested_route ?? props.active?.requested_route,
+    resolved_route: props.progress?.resolved_route ?? props.active?.resolved_route,
+  }
+})
+const routeKind = computed(() => (
+  routeState.value.resolved_route || routeState.value.requested_route || 'asr'
+))
+const routeLabel = computed(() => transcriptionRouteLabel(routeState.value))
+const transcribeLabel = computed(() => transcriptionPhaseLabel(routeState.value))
+
 const phaseBars = computed(() => [
   { key: 'download', label: PHASE_LABELS.download, display: download.value },
-  { key: 'transcribe', label: PHASE_LABELS.transcribe, display: transcribe.value },
+  { key: 'transcribe', label: transcribeLabel.value, display: transcribe.value },
   { key: 'polish', label: PHASE_LABELS.polish, display: polish.value },
 ])
 
-const phaseLabel = computed(() => PHASE_LABELS[props.progress?.phase] || '准备中')
+const phaseLabel = computed(() => {
+  if (props.progress?.phase === 'transcribe') return transcribeLabel.value
+  return PHASE_LABELS[props.progress?.phase] || '准备中'
+})
 const etaText = computed(() =>
   formatEta(displayEta.value, props.progress?.phase),
 )

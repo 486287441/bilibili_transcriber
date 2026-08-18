@@ -10,7 +10,15 @@ from typing import Any, Callable
 from server import queue_db
 from server.error_summary import summarize_task_error
 from server.progress_tracker import progress_tracker
-from server.queue_db import TaskRow, init_db, recover_interrupted
+from server.queue_db import (
+    REQUESTED_ROUTES,
+    RESOLVED_ROUTES,
+    RequestedRoute,
+    ResolvedRoute,
+    TaskRow,
+    init_db,
+    recover_interrupted,
+)
 from server.websocket_manager import ws_manager
 from video_urls import detect_site
 
@@ -19,7 +27,9 @@ logger = logging.getLogger("server.queue")
 # Valid transitions: each status maps to allowed next statuses.
 _TRANSITIONS: dict[str, set[str]] = {
     "pending": {"downloading", "failed", "cancelled"},
-    "downloading": {"transcribing", "failed", "pending", "cancelled"},
+    # polish_only reprocessing is claimed as ``downloading`` by the generic
+    # queue worker, then legitimately skips straight to the polish stage.
+    "downloading": {"transcribing", "polishing", "failed", "pending", "cancelled"},
     "transcribing": {"polishing", "failed", "pending", "cancelled"},
     "polishing": {"completed", "failed", "pending", "cancelled"},
     "completed": set(),
@@ -28,6 +38,7 @@ _TRANSITIONS: dict[str, set[str]] = {
 }
 
 ACTIVE_STATUSES = frozenset({"pending", "downloading", "transcribing", "polishing"})
+TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 class DuplicateTaskError(Exception):
@@ -71,9 +82,24 @@ class QueueService:
         recovered = recover_interrupted()
         if recovered:
             logger.info("恢复中断任务 %d 条: %s", len(recovered), recovered)
-        purged = queue_db.purge_completed_tasks()
+        # A crash can happen after a task was committed as completed but before
+        # it was copied to history and removed from the queue.  Re-archive such
+        # rows idempotently instead of blindly purging them on startup.
+        purged = 0
+        for completed in queue_db.list_tasks(status="completed"):
+            try:
+                history_service.archive_task(
+                    completed,
+                    processing_duration_sec=None,
+                    local_audio_path=None,
+                )
+            except Exception:
+                logger.exception("恢复 completed 任务历史失败 id=%s", completed.id)
+                continue
+            if queue_db.delete_task(completed.id):
+                purged += 1
         if purged:
-            logger.info("清理已完成队列任务 %d 条", purged)
+            logger.info("补归档并清理已完成队列任务 %d 条", purged)
 
     def is_cancel_requested(self, task_id: str) -> bool:
         with self._lock:
@@ -103,8 +129,20 @@ class QueueService:
             raise TaskNotFoundError(task_id)
         self.validate_transition(task.status, new_status)
         old_status = task.status
-        updated = queue_db.update_task_fields(task_id, status=new_status, **extra)
-        assert updated is not None
+        updated = queue_db.update_task_fields_if_status(
+            task_id,
+            old_status,
+            status=new_status,
+            **extra,
+        )
+        if updated is None:
+            current = queue_db.get_task(task_id)
+            if current is None:
+                raise TaskNotFoundError(task_id)
+            raise InvalidTransitionError(
+                f"concurrent transition {old_status} -> {current.status}; "
+                f"cannot apply {new_status}"
+            )
         self._emit_state_changed(task_id, old_status, new_status)
         return updated
 
@@ -120,10 +158,13 @@ class QueueService:
         local_audio_path: str | None = None,
         title: str | None = None,
         duration_sec: float | None = None,
+        requested_route: RequestedRoute = "auto",
     ) -> TaskRow:
         from server import activity
 
         activity.touch()
+        if requested_route not in REQUESTED_ROUTES:
+            raise ValueError(f"unsupported requested route: {requested_route}")
         existing = queue_db.find_active_by_url(url)
         if existing:
             raise DuplicateTaskError(existing.id)
@@ -138,9 +179,15 @@ class QueueService:
             local_audio_path=local_audio_path,
             title=title,
             duration_sec=duration_sec,
+            requested_route=requested_route,
         )
 
-        logger.info("任务入队 id=%s url=%s", task.id, url)
+        logger.info(
+            "任务入队 id=%s url=%s requested_route=%s",
+            task.id,
+            url,
+            requested_route,
+        )
         self._emit_queue_updated("enqueue", task.id)
         if self._on_enqueue_metadata:
             self._on_enqueue_metadata(task.id, url)
@@ -172,17 +219,34 @@ class QueueService:
     def cancel(self, task_id: str) -> TaskRow:
         task = self.get(task_id)
         if task.status == "pending":
-            updated = self.transition(task_id, "cancelled")
-            queue_db.delete_task(task_id)
-            self._emit_queue_updated("cancel", task_id)
-            return updated
-        if task.status in {"downloading", "transcribing", "polishing"}:
-            old_status = task.status
+            updated = queue_db.cancel_pending_task(task_id)
+            if updated is not None:
+                self._emit_state_changed(task_id, "pending", "cancelled")
+                self._emit_queue_updated("cancel", task_id)
+                return updated
+            # The worker may have claimed it between ``get`` and the atomic
+            # pending delete.  Re-read and use the active cancellation path.
+            task = self.get(task_id)
+        if task.status in {"downloading", "transcribing"}:
             self.request_cancel(task_id)
-            queue_db.delete_task(task_id)
-            progress_tracker.clear_task(task_id)
-            self.finish_cancel(task_id, old_status)
-            return task
+            try:
+                current = self.get(task_id)
+            except TaskNotFoundError:
+                self.clear_cancel(task_id)
+                raise
+            if current.status == "polishing":
+                self.clear_cancel(task_id)
+                raise TaskInProgressError("任务已进入发布阶段，无法安全取消")
+            if current.status not in {"downloading", "transcribing"}:
+                self.clear_cancel(task_id)
+                raise TaskInProgressError("任务状态已变化，无法取消")
+            # The worker owns cleanup and the final state transition.  Keeping
+            # the row/cancel flag alive lets long OCR loops observe the request
+            # instead of clearing it before they get a chance to stop.
+            self._emit_queue_updated("cancel_requested", task_id)
+            return current
+        if task.status == "polishing":
+            raise TaskInProgressError("任务已进入发布阶段，无法安全取消")
         raise TaskInProgressError("只能取消 pending 或进行中的任务")
 
     def retry(self, task_id: str, *, reset_retry_count: bool = True) -> TaskRow:
@@ -194,6 +258,11 @@ class QueueService:
             "error_message": None,
             "completed_at": None,
             "output_doc_url": None,
+            "output_text_path": None,
+            "resolved_route": None,
+            "route_diagnostics": None,
+            "raw_text_path": None,
+            "source_segments_path": None,
         }
         if reset_retry_count:
             fields["retry_count"] = 0
@@ -216,6 +285,14 @@ class QueueService:
 
     def handle_failure(self, task_id: str, message: str) -> TaskRow:
         task = self.get(task_id)
+        if task.status in TERMINAL_STATUSES:
+            logger.warning(
+                "忽略 terminal 任务的失败回写 id=%s status=%s err=%s",
+                task_id,
+                task.status,
+                message,
+            )
+            return task
         brief = summarize_task_error(message) or message
         retry_count = task.retry_count + 1
         if retry_count < task.max_retries:
@@ -240,6 +317,30 @@ class QueueService:
             task_id,
             status="failed",
             retry_count=retry_count,
+            error_message=brief,
+            completed_at=queue_db._now_iso(),
+        )
+        assert updated is not None
+        self._emit_state_changed(task_id, task.status, "failed")
+        return updated
+
+    def fail_permanently(self, task_id: str, message: str) -> TaskRow:
+        """Fail without automatic retries for unsupported/deterministic routes."""
+
+        task = self.get(task_id)
+        if task.status in TERMINAL_STATUSES:
+            logger.warning(
+                "忽略 terminal 任务的永久失败回写 id=%s status=%s err=%s",
+                task_id,
+                task.status,
+                message,
+            )
+            return task
+        brief = summarize_task_error(message) or message
+        updated = queue_db.update_task_fields(
+            task_id,
+            status="failed",
+            retry_count=max(task.retry_count, task.max_retries),
             error_message=brief,
             completed_at=queue_db._now_iso(),
         )
@@ -283,6 +384,38 @@ class QueueService:
             task_id,
             updated.title,
             updated.duration_sec,
+        )
+        return updated
+
+    def update_route_details(
+        self,
+        task_id: str,
+        *,
+        resolved_route: ResolvedRoute,
+        route_diagnostics: dict[str, Any] | None = None,
+        raw_text_path: str | None = None,
+        source_segments_path: str | None = None,
+    ) -> TaskRow:
+        """Persist the selected extractor and its durable source artifacts."""
+        if resolved_route not in RESOLVED_ROUTES:
+            raise ValueError(f"unsupported resolved route: {resolved_route}")
+        updated = queue_db.update_task_fields(
+            task_id,
+            resolved_route=resolved_route,
+            route_diagnostics=route_diagnostics,
+            raw_text_path=raw_text_path,
+            source_segments_path=source_segments_path,
+        )
+        if updated is None:
+            raise TaskNotFoundError(task_id)
+        self._broadcast(
+            "task.route_resolved",
+            {
+                "task_id": task_id,
+                "requested_route": updated.requested_route,
+                "resolved_route": updated.resolved_route,
+                "route_diagnostics": updated.route_diagnostics,
+            },
         )
         return updated
 

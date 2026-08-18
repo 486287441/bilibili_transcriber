@@ -49,10 +49,12 @@
       :page="historyPage"
       :collapsed="historyCollapsed"
       :evaluating-ids="recommendationEvaluating"
+      :reprocessing-ids="historyReprocessing"
       @search="onHistorySearch"
       @page="onHistoryPage"
       @delete="onDeleteHistory"
       @evaluate-recommendation="onEvaluateRecommendation"
+      @reprocess-route="onReprocessHistory"
       @toggle-collapse="toggleHistoryCollapsed"
     />
 
@@ -72,7 +74,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api } from './api.js'
-import { useModelLoadProgress } from './composables.js'
+import { TRANSCRIPTION_ROUTE_LABELS, useModelLoadProgress } from './composables.js'
 import { storageGet, storageSet } from './storage.js'
 import { createWsClient } from './ws.js'
 import HistoryPanel from './components/HistoryPanel.vue'
@@ -100,6 +102,7 @@ const historyQuery = ref('')
 const historyCollapsed = ref(storageGet('ui.historyCollapsed', false))
 const settingsRef = ref(null)
 const recommendationEvaluating = ref(new Set())
+const historyReprocessing = ref(new Set())
 const notice = ref('')
 
 const ACTIVE = new Set(['downloading', 'transcribing', 'polishing'])
@@ -165,6 +168,13 @@ function setRecommendationEvaluating(id, evaluating) {
   recommendationEvaluating.value = next
 }
 
+function setHistoryReprocessing(id, reprocessing) {
+  const next = new Set(historyReprocessing.value)
+  if (reprocessing) next.add(id)
+  else next.delete(id)
+  historyReprocessing.value = next
+}
+
 function scheduleStatusPoll(loading = false) {
   if (statusTimer != null) clearTimeout(statusTimer)
   statusTimer = setTimeout(pollStatus, loading ? 2000 : 30000)
@@ -222,7 +232,11 @@ function handleWs(msg) {
     currentProgress.value = msg.payload
     return
   }
-  if (msg.type === 'queue.updated' || msg.type === 'task.state_changed') {
+  if (
+    msg.type === 'queue.updated' ||
+    msg.type === 'task.state_changed' ||
+    msg.type === 'task.route_resolved'
+  ) {
     refreshQueue()
     if (msg.type === 'task.state_changed' && msg.payload?.new_status === 'completed') {
       refreshHistory()
@@ -265,12 +279,20 @@ function handleWs(msg) {
   }
 }
 
-async function onAddQueue(url) {
+async function onAddQueue({ url, requestedRoute = 'auto', onSuccess, onError }) {
   try {
-    await api.addQueue(url)
+    await api.addQueue(url, requestedRoute)
+  } catch (e) {
+    const message = e.message || '添加失败'
+    if (onError) onError(message)
+    else showNotice(message)
+    return
+  }
+  onSuccess?.()
+  try {
     await refreshQueue()
   } catch (e) {
-    alert(e.message || '添加失败')
+    showNotice(e.message || '任务已加入，但队列刷新失败')
   }
 }
 
@@ -317,6 +339,26 @@ async function onHistoryPage(p) {
 async function onDeleteHistory(id) {
   await api.deleteHistory(id)
   await refreshHistory()
+}
+
+async function onReprocessHistory({ id, requestedRoute, onSuccess }) {
+  if (historyReprocessing.value.has(id)) return
+  setHistoryReprocessing(id, true)
+  try {
+    await api.reprocessHistory(id, requestedRoute)
+    onSuccess?.()
+    const routeLabel = TRANSCRIPTION_ROUTE_LABELS[requestedRoute] || requestedRoute
+    showNotice(`已按「${routeLabel}」加入队列`)
+    try {
+      await refreshQueue()
+    } catch (e) {
+      showNotice(e.message || '重跑已加入，但队列刷新失败')
+    }
+  } catch (e) {
+    showNotice(e.message || '加入重跑队列失败')
+  } finally {
+    setHistoryReprocessing(id, false)
+  }
 }
 
 async function onEvaluateRecommendation(id) {

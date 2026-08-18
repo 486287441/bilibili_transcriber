@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from server.history_service import history_service
-from server.queue_service import queue_service
+from server.queue_service import DuplicateTaskError, queue_service
 
 router = APIRouter(prefix="/api")
 _recommendation_tasks: dict[str, asyncio.Task[None]] = {}
@@ -19,6 +19,7 @@ _recommendation_tasks: dict[str, asyncio.Task[None]] = {}
 
 class ReprocessBody(BaseModel):
     mode: str = Field(default="full", pattern="^(full|polish_only|transcribe_and_polish)$")
+    requested_route: Literal["auto", "subtitle", "ocr", "asr"] = "auto"
 
 
 class ChatMessage(BaseModel):
@@ -73,16 +74,34 @@ async def reprocess_history(history_id: str, body: ReprocessBody) -> dict[str, A
             detail={"error": "历史记录不存在", "code": "NOT_FOUND"},
         ) from exc
 
-    task = queue_service.enqueue(
-        row.url,
-        source="api",
-        reprocess_mode=body.mode,
-        history_source_id=history_id,
-        local_audio_path=row.local_audio_path if body.mode == "transcribe_and_polish" else None,
-        title=row.title,
-        duration_sec=row.duration_sec,
-    )
-    return {"task_id": task.id, "mode": body.mode, "status": task.status}
+    try:
+        task = queue_service.enqueue(
+            row.url,
+            source="api",
+            reprocess_mode=body.mode,
+            history_source_id=history_id,
+            local_audio_path=(
+                row.local_audio_path if body.mode == "transcribe_and_polish" else None
+            ),
+            title=row.title,
+            duration_sec=row.duration_sec,
+            requested_route=body.requested_route,
+        )
+    except DuplicateTaskError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "相同 URL 已在队列中",
+                "code": "DUPLICATE_URL",
+                "existing_id": exc.existing_id,
+            },
+        ) from exc
+    return {
+        "task_id": task.id,
+        "mode": body.mode,
+        "requested_route": task.requested_route,
+        "status": task.status,
+    }
 
 
 async def _evaluate_history_recommendation(history_id: str, task_id: str) -> None:

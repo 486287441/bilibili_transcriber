@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api")
 
 class QueueAddBody(BaseModel):
     url: str = Field(min_length=1)
+    requested_route: Literal["auto", "subtitle", "ocr", "asr"] = "auto"
 
 
 class QueueReorderBody(BaseModel):
@@ -42,7 +43,12 @@ async def add_queue_item(body: QueueAddBody) -> dict[str, Any]:
             status_code=400,
             detail={"error": "无效或不支持的视频链接", "code": "INVALID_URL"},
         )
-    result = submit_url(url, source="api", silent_duplicate=False)
+    result = submit_url(
+        url,
+        source="api",
+        silent_duplicate=False,
+        requested_route=body.requested_route,
+    )
     if result.skipped_history:
         raise HTTPException(
             status_code=409,
@@ -101,9 +107,13 @@ async def get_queue_item(task_id: str) -> dict[str, Any]:
 async def delete_queue_item(task_id: str) -> dict[str, str]:
     try:
         task = queue_service.get(task_id)
-        if task.status in {"downloading", "transcribing", "polishing"}:
-            queue_service.cancel(task_id)
-            return {"status": "cancelled"}
+        if task.status in {"pending", "downloading", "transcribing", "polishing"}:
+            cancelled = queue_service.cancel(task_id)
+            return {
+                "status": (
+                    "cancelled" if cancelled.status == "cancelled" else "cancel_requested"
+                )
+            }
         queue_service.delete(task_id)
         return {"status": "deleted"}
     except TaskNotFoundError as exc:

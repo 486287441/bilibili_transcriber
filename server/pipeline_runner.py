@@ -71,6 +71,53 @@ def download_with_progress(url: str, task_id: str):
     return audio, meta, err
 
 
+def download_video_with_progress(url: str, task_id: str):
+    """Download a video rendition for hard-subtitle inspection/OCR."""
+
+    from server.video_ocr import download_video_for_ocr
+
+    progress_tracker.set_phase(task_id, "download")
+    progress_tracker.update(
+        task_id,
+        phase_progress=1.0,
+        detail={"message": "正在下载视频以检测画面字幕"},
+    )
+    done = threading.Event()
+    has_bytes = threading.Event()
+    start = time.monotonic()
+
+    def ticker() -> None:
+        from server import progress_db
+
+        est = progress_db.estimate_phase_seconds(duration_sec=None, phase="download")
+        while not done.wait(0.5):
+            if has_bytes.is_set():
+                continue
+            elapsed = time.monotonic() - start
+            pct = min(30.0, 100.0 * (1.0 - math.exp(-elapsed / max(est * 0.25, 4.0))))
+            progress_tracker.update(task_id, phase_progress=pct)
+
+    thread = threading.Thread(
+        target=ticker,
+        name=f"video-download-progress-{task_id[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    hook = _ytdlp_progress_hook(task_id, has_bytes=has_bytes)
+    try:
+        video, meta, err = download_video_for_ocr(url, task_id, progress_hook=hook)
+    finally:
+        done.set()
+        thread.join(timeout=1.0)
+    if video and meta:
+        progress_tracker.update(
+            task_id,
+            phase_progress=100.0,
+            detail={"message": "视频下载完成"},
+        )
+    return video, meta, err
+
+
 def transcribe_with_progress(
     audio_path: str,
     model,

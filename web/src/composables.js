@@ -233,6 +233,48 @@ export const STATUS_LABELS = {
   cancelled: '已取消',
 }
 
+export const TRANSCRIPTION_ROUTE_OPTIONS = [
+  { value: 'auto', label: '自动判断' },
+  { value: 'subtitle', label: 'B站字幕' },
+  { value: 'ocr', label: '画面 OCR' },
+  { value: 'asr', label: '语音识别' },
+]
+
+export const TRANSCRIPTION_ROUTE_LABELS = Object.fromEntries(
+  TRANSCRIPTION_ROUTE_OPTIONS.map((item) => [item.value, item.label]),
+)
+
+/** Resolve the physical transcription route, with ASR as the legacy-data fallback. */
+export function effectiveTranscriptionRoute(item) {
+  const resolved = item?.resolved_route
+  if (resolved && resolved !== 'auto') return resolved
+
+  const requested = item?.requested_route
+  if (requested && requested !== 'auto') return requested
+
+  const hasRouteFields = item && (
+    Object.prototype.hasOwnProperty.call(item, 'requested_route') ||
+    Object.prototype.hasOwnProperty.call(item, 'resolved_route')
+  )
+  return hasRouteFields ? null : 'asr'
+}
+
+export function transcriptionRouteLabel(item) {
+  const route = effectiveTranscriptionRoute(item)
+  if (item?.requested_route === 'auto') {
+    return route ? `自动 · ${TRANSCRIPTION_ROUTE_LABELS[route] || route}` : '自动判断'
+  }
+  return TRANSCRIPTION_ROUTE_LABELS[route] || TRANSCRIPTION_ROUTE_LABELS[item?.requested_route] || '自动判断'
+}
+
+export function transcriptionPhaseLabel(item) {
+  const route = effectiveTranscriptionRoute(item)
+  if (route === 'subtitle') return '字幕提取'
+  if (route === 'ocr') return '画面 OCR'
+  if (route === 'asr') return '语音转写'
+  return '路线判断'
+}
+
 const SITE_HINTS = [
   ['bilibili', ['bilibili.com', 'b23.tv']],
   ['youtube', ['youtube.com', 'youtu.be']],

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
-from server.queue_db import TaskRow
+from server.queue_db import RequestedRoute, TaskRow
 from server.queue_service import DuplicateTaskError, queue_service
 from video_urls import detect_site
 
@@ -34,6 +34,7 @@ def submit_url(
     source: Source,
     silent_duplicate: bool = False,
     emit_clipboard_detected: bool = False,
+    requested_route: RequestedRoute = "auto",
 ) -> SubmitResult:
     """Enqueue a validated video URL unless it already exists in history."""
     from server import history_db
@@ -53,6 +54,7 @@ def submit_url(
             url,
             source=source,
             site=detect_site(url),
+            requested_route=requested_route,
         )
     except DuplicateTaskError as exc:
         if silent_duplicate:

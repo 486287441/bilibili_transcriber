@@ -49,7 +49,10 @@ export const api = {
   logs: () => request('/api/logs'),
   logContent: (name, lines = 500) => request(`/api/logs/${encodeURIComponent(name)}?lines=${lines}`),
   queue: (status) => request(status ? `/api/queue?status=${status}` : '/api/queue'),
-  addQueue: (url) => request('/api/queue', { method: 'POST', body: JSON.stringify({ url }) }),
+  addQueue: (url, requestedRoute = 'auto') => request('/api/queue', {
+    method: 'POST',
+    body: JSON.stringify({ url, requested_route: requestedRoute }),
+  }),
   deleteQueue: (id) => request(`/api/queue/${id}`, { method: 'DELETE' }),
   retryQueue: (id) => request(`/api/queue/${id}/retry`, { method: 'POST' }),
   reorderQueue: (ids) => request('/api/queue/reorder', { method: 'PATCH', body: JSON.stringify({ ids }) }),
@@ -65,8 +68,10 @@ export const api = {
   },
   historyDetail: (id) => request(`/api/history/${id}`),
   deleteHistory: (id) => request(`/api/history/${id}`, { method: 'DELETE' }),
-  reprocessHistory: (id, mode = 'full') =>
-    request(`/api/history/${id}/reprocess`, { method: 'POST', body: JSON.stringify({ mode }) }),
+  reprocessHistory: (id, requestedRoute) => request(`/api/history/${id}/reprocess`, {
+    method: 'POST',
+    body: JSON.stringify({ requested_route: requestedRoute }),
+  }),
   evaluateRecommendation: (id) =>
     request(`/api/history/${id}/recommendation`, { method: 'POST' }),
   historyChat: (id, messages) =>
