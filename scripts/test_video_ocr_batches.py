@@ -37,10 +37,16 @@ from server import video_ocr  # noqa: E402
 class StubProcessor:
     def __init__(self) -> None:
         self.calls = 0
+        self.batch_sizes: list[int] = []
 
     def recognize_lines(self, _frame: Path) -> list[Any]:
         self.calls += 1
         return []
+
+    def recognize_many(self, frames: list[Path]) -> list[list[Any]]:
+        self.batch_sizes.append(len(frames))
+        self.calls += len(frames)
+        return [[] for _frame in frames]
 
 
 def _create_stub_batch(
@@ -128,6 +134,8 @@ def test_ocr_uses_60_frame_batches_and_continuous_cross_batch_timeline() -> None
         ]
         assert max_frames_on_disk == 60
         assert processor.calls == 125
+        assert max(processor.batch_sizes) == 8
+        assert len(processor.batch_sizes) < processor.calls
         assert len(segments) == 125
         assert diagnostics["ocr_frame_count"] == 125
         assert diagnostics["ocr_segment_count"] == 125
@@ -143,6 +151,50 @@ def test_ocr_uses_60_frame_batches_and_continuous_cross_batch_timeline() -> None
         assert segments[-1].end_sec == 125.0
         assert progress_events[-1][0] == 100.0
         assert not (root / "ocr_frames").exists()
+
+
+def test_ocr_skips_adjacent_perceptual_duplicates() -> None:
+    with tempfile.TemporaryDirectory(prefix="ocr-dedup-contract-") as temp_dir:
+        root = Path(temp_dir)
+        video = root / "video.mp4"
+        video.touch()
+        processor = StubProcessor()
+
+        def fake_extract_batch(
+            _video_path: str,
+            output_dir: Path,
+            *,
+            duration_sec: float,
+            interval_sec: float,
+            **_kwargs: Any,
+        ) -> list[Path]:
+            return _create_stub_batch(
+                output_dir,
+                duration_sec=duration_sec,
+                interval_sec=interval_sec,
+            )
+
+        with (
+            patch.object(
+                video_ocr,
+                "probe_video",
+                return_value=video_ocr.VideoInfo(width=1280, height=720, duration_sec=8.0),
+            ),
+            patch.object(video_ocr, "_extract_frame_batch", side_effect=fake_extract_batch),
+            patch.object(video_ocr, "_frame_dhash", return_value=12345),
+            patch.object(
+                video_ocr,
+                "_subtitle_text_for_frame",
+                return_value=("同一条持续字幕", 0.99),
+            ),
+        ):
+            segments, diagnostics = video_ocr.extract_ocr_segments(str(video), processor)
+
+        assert processor.calls == 1
+        assert processor.batch_sizes == [1]
+        assert diagnostics["ocr_frame_count"] == 8
+        assert diagnostics["ocr_skipped_duplicate_frames"] == 7
+        assert segments
 
 
 def test_cancellable_process_terminates_ffmpeg_and_raises() -> None:
@@ -253,6 +305,7 @@ def test_ocr_cancellation_propagates_and_removes_current_batch() -> None:
 def main() -> int:
     tests = [
         test_ocr_uses_60_frame_batches_and_continuous_cross_batch_timeline,
+        test_ocr_skips_adjacent_perceptual_duplicates,
         test_cancellable_process_terminates_ffmpeg_and_raises,
         test_ocr_cancellation_propagates_and_removes_current_batch,
     ]

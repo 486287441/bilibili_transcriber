@@ -15,7 +15,6 @@ from transcript_processing import remove_asr_punctuation
 from server.settings_store import (
     get_deepseek_model,
     get_polish_prompt_template,
-    get_recommendation_criteria,
     get_transcript_correction_prompt,
 )
 
@@ -94,78 +93,36 @@ def correct_transcript(raw_text: str) -> str:
 
 
 def organize_transcript(trusted_text: str) -> str:
-    """Stage 2: build recommendation, summary, TOC, and chapter structure."""
+    """Stage 2: build the summary, TOC, and chapter structure."""
     text = (trusted_text or "").strip()
     if not text:
         raise DeepSeekError("可信逐字稿为空，无法调用 DeepSeek。")
 
-    system_prompt = render_polish_system(
-        get_polish_prompt_template(),
-        get_recommendation_criteria(),
-    )
-    content = _completion(system_prompt, build_polish_user_message(text))
-
-    from server.recommendation import normalize_recommendation
-
-    return normalize_recommendation(content)
+    system_prompt = render_polish_system(get_polish_prompt_template())
+    return _completion(system_prompt, build_polish_user_message(text))
 
 
-def process_transcript(raw_text: str, *, input_is_trusted: bool = False) -> tuple[str, str]:
-    """Run the two-stage flow; return ``(trusted transcript, article Markdown)``."""
+def process_transcript(
+    raw_text: str,
+    *,
+    input_is_trusted: bool = False,
+) -> tuple[str, str]:
+    """Run the strict two-stage flow; return trusted text and article Markdown."""
     trusted_text = (raw_text or "").strip() if input_is_trusted else correct_transcript(raw_text)
     return trusted_text, organize_transcript(trusted_text)
 
 
-def polish_and_summarize(raw_text: str, *, input_is_trusted: bool = False) -> str:
-    """Backward-compatible article-only facade for the two-stage flow."""
-    _trusted_text, article = process_transcript(raw_text, input_is_trusted=input_is_trusted)
+def polish_and_summarize(
+    raw_text: str,
+    *,
+    input_is_trusted: bool = False,
+) -> str:
+    """Backward-compatible article-only facade for the strict polish flow."""
+    _trusted_text, article = process_transcript(
+        raw_text,
+        input_is_trusted=input_is_trusted,
+    )
     return article
-
-
-def evaluate_recommendation(article_text: str) -> str:
-    """Evaluate an existing polished article without re-running the full polish flow."""
-    text = (article_text or "").strip()
-    if not text:
-        raise DeepSeekError("整理后文稿为空，无法评估。")
-
-    recommendation_criteria = get_recommendation_criteria()
-    system = f"""你是视频注意力守门助手。请根据整理后的视频文稿，分别评估内容本身是否值得了解，以及用户读完总结后原片还有多少增量价值。
-
-{recommendation_criteria}
-
-只输出一个完整的「# 推荐指数」Markdown 章节，不要复述文章，不要输出思考过程。"""
-    try:
-        from server.recommendation import remove_recommendation
-
-        response = _client().chat.completions.create(
-            model=get_deepseek_model(),
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": build_followup_article_message(remove_recommendation(text)),
-                },
-            ],
-        )
-    except DeepSeekError:
-        raise
-    except Exception as exc:
-        raise _wrap_api_error(exc) from exc
-
-    choice = response.choices[0] if response.choices else None
-    content = choice.message.content if choice and choice.message else None
-    if not content or not content.strip():
-        raise DeepSeekError("DeepSeek 返回的推荐评估为空，请重试。")
-
-    from server.recommendation import normalize_recommendation, parse_recommendation
-
-    result = content.strip()
-    if not result.startswith("# 推荐指数"):
-        result = f"# 推荐指数\n{result}"
-    if not parse_recommendation(result):
-        raise DeepSeekError("DeepSeek 返回的推荐评估格式不完整，请重试。")
-    return normalize_recommendation(result)
 
 
 def _build_chat_turns(article_text: str, messages: list[dict[str, str]]) -> list[dict[str, str]]:

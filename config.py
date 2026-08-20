@@ -22,6 +22,7 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro").strip()
 
 FEISHU_WIKI_SPACE_ID = os.getenv("FEISHU_WIKI_SPACE_ID", "").strip()
 FEISHU_WIKI_PARENT_NODE_TOKEN = os.getenv("FEISHU_WIKI_PARENT_NODE_TOKEN", "").strip()
+LARK_CLI_PATH = os.getenv("LARK_CLI_PATH", "").strip()
 
 # yt-dlp Netscape cookie files (optional; only used when the file exists).
 # Export from browser extensions such as "Get cookies.txt LOCALLY".
@@ -63,7 +64,15 @@ PADDLEOCR_DETECTION_SAMPLES = int(
     os.getenv("PADDLEOCR_DETECTION_SAMPLES", "12") or "12"
 )
 PADDLEOCR_FRAME_INTERVAL_SEC = float(
-    os.getenv("PADDLEOCR_FRAME_INTERVAL_SEC", "1.0") or "1.0"
+    os.getenv("PADDLEOCR_FRAME_INTERVAL_SEC", "2.0") or "2.0"
+)
+PADDLEOCR_BATCH_SIZE = int(os.getenv("PADDLEOCR_BATCH_SIZE", "8") or "8")
+PADDLEOCR_DUPLICATE_HASH_DISTANCE = int(
+    os.getenv("PADDLEOCR_DUPLICATE_HASH_DISTANCE", "2") or "2"
+)
+PADDLEOCR_FRAME_WIDTH = int(os.getenv("PADDLEOCR_FRAME_WIDTH", "960") or "960")
+PADDLEOCR_VIDEO_MAX_HEIGHT = int(
+    os.getenv("PADDLEOCR_VIDEO_MAX_HEIGHT", "480") or "480"
 )
 
 
@@ -133,7 +142,6 @@ def resolve_ytdlp_cookie_file(site: str) -> str | None:
     return None
 
 _REQUIRED: tuple[tuple[str, str], ...] = (
-    ("DEEPSEEK_API_KEY", DEEPSEEK_API_KEY),
     ("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL),
     ("DEEPSEEK_MODEL", DEEPSEEK_MODEL),
     ("FEISHU_WIKI_SPACE_ID", FEISHU_WIKI_SPACE_ID),

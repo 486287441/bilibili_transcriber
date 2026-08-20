@@ -15,16 +15,6 @@
       <div class="status">
         <span class="dot" :class="wsConnected ? 'ok' : 'err'" />
         {{ wsConnected ? '运行中' : '未连接' }}
-        <span v-if="wsConnected" class="tag" :class="'tag-' + modelStatus.variant" :title="modelStatus.title">
-          {{ modelStatus.text }}
-        </span>
-        <div
-          v-if="wsConnected && modelLoadVisible"
-          class="model-load-bar"
-          title="模型加载进度"
-        >
-          <div class="model-load-bar-fill" :style="{ width: modelLoadDisplay + '%' }" />
-        </div>
       </div>
       <button type="button" class="ghost" @click="openSettings">设置</button>
     </header>
@@ -32,7 +22,6 @@
     <main class="layout">
       <QueuePanel
         :items="queueItems"
-        @add="onAddQueue"
         @delete="onDeleteQueue"
         @retry="onRetryQueue"
         @reorder="onReorderQueue"
@@ -47,15 +36,11 @@
       :items="historyItems"
       :total="historyTotal"
       :page="historyPage"
-      :collapsed="historyCollapsed"
-      :evaluating-ids="recommendationEvaluating"
-      :reprocessing-ids="historyReprocessing"
+      :publish-retrying-ids="publishRetrying"
       @search="onHistorySearch"
       @page="onHistoryPage"
       @delete="onDeleteHistory"
-      @evaluate-recommendation="onEvaluateRecommendation"
-      @reprocess-route="onReprocessHistory"
-      @toggle-collapse="toggleHistoryCollapsed"
+      @retry-publish="onRetryPublish"
     />
 
     <div v-if="notice" class="app-notice" role="status" aria-live="polite">
@@ -74,8 +59,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api } from './api.js'
-import { TRANSCRIPTION_ROUTE_LABELS, useModelLoadProgress } from './composables.js'
-import { storageGet, storageSet } from './storage.js'
+import { useModelLoadProgress } from './composables.js'
 import { createWsClient } from './ws.js'
 import HistoryPanel from './components/HistoryPanel.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
@@ -90,6 +74,7 @@ const settings = ref({
   auto_open_feishu: false,
   model_idle_timeout_minutes: 30,
   deepseek_model: 'deepseek-v4-pro',
+  auto_fallback_route: 'asr',
 })
 const secrets = ref({})
 const serviceStatus = ref({ model_loaded: false, model_loading: false })
@@ -99,10 +84,8 @@ const historyItems = ref([])
 const historyTotal = ref(0)
 const historyPage = ref(1)
 const historyQuery = ref('')
-const historyCollapsed = ref(storageGet('ui.historyCollapsed', false))
 const settingsRef = ref(null)
-const recommendationEvaluating = ref(new Set())
-const historyReprocessing = ref(new Set())
+const publishRetrying = ref(new Set())
 const notice = ref('')
 
 const ACTIVE = new Set(['downloading', 'transcribing', 'polishing'])
@@ -159,20 +142,6 @@ function showNotice(message) {
     notice.value = ''
     noticeTimer = null
   }, 2600)
-}
-
-function setRecommendationEvaluating(id, evaluating) {
-  const next = new Set(recommendationEvaluating.value)
-  if (evaluating) next.add(id)
-  else next.delete(id)
-  recommendationEvaluating.value = next
-}
-
-function setHistoryReprocessing(id, reprocessing) {
-  const next = new Set(historyReprocessing.value)
-  if (reprocessing) next.add(id)
-  else next.delete(id)
-  historyReprocessing.value = next
 }
 
 function scheduleStatusPoll(loading = false) {
@@ -263,36 +232,13 @@ function handleWs(msg) {
     })
     return
   }
-  if (msg.type === 'history.created' || msg.type === 'history.deleted') {
+  if (
+    msg.type === 'history.created' ||
+    msg.type === 'history.deleted' ||
+    msg.type === 'history.publish_updated'
+  ) {
     refreshHistory()
     return
-  }
-  if (msg.type === 'history.recommendation_completed') {
-    setRecommendationEvaluating(msg.payload?.id, false)
-    refreshHistory()
-    showNotice('推荐指数评估完成')
-    return
-  }
-  if (msg.type === 'history.recommendation_failed') {
-    setRecommendationEvaluating(msg.payload?.id, false)
-    showNotice(msg.payload?.error || '推荐指数评估失败')
-  }
-}
-
-async function onAddQueue({ url, requestedRoute = 'auto', onSuccess, onError }) {
-  try {
-    await api.addQueue(url, requestedRoute)
-  } catch (e) {
-    const message = e.message || '添加失败'
-    if (onError) onError(message)
-    else showNotice(message)
-    return
-  }
-  onSuccess?.()
-  try {
-    await refreshQueue()
-  } catch (e) {
-    showNotice(e.message || '任务已加入，但队列刷新失败')
   }
 }
 
@@ -341,41 +287,20 @@ async function onDeleteHistory(id) {
   await refreshHistory()
 }
 
-async function onReprocessHistory({ id, requestedRoute, onSuccess }) {
-  if (historyReprocessing.value.has(id)) return
-  setHistoryReprocessing(id, true)
+async function onRetryPublish(id) {
+  if (publishRetrying.value.has(id)) return
+  publishRetrying.value = new Set(publishRetrying.value).add(id)
   try {
-    await api.reprocessHistory(id, requestedRoute)
-    onSuccess?.()
-    const routeLabel = TRANSCRIPTION_ROUTE_LABELS[requestedRoute] || requestedRoute
-    showNotice(`已按「${routeLabel}」加入队列`)
-    try {
-      await refreshQueue()
-    } catch (e) {
-      showNotice(e.message || '重跑已加入，但队列刷新失败')
-    }
+    await api.retryHistoryPublish(id)
+    showNotice('已重新加入飞书后台发布队列')
+    await refreshHistory()
   } catch (e) {
-    showNotice(e.message || '加入重跑队列失败')
+    showNotice(e.message || '重试飞书发布失败')
   } finally {
-    setHistoryReprocessing(id, false)
+    const next = new Set(publishRetrying.value)
+    next.delete(id)
+    publishRetrying.value = next
   }
-}
-
-async function onEvaluateRecommendation(id) {
-  if (recommendationEvaluating.value.has(id)) return
-  setRecommendationEvaluating(id, true)
-  try {
-    await api.evaluateRecommendation(id)
-    showNotice('已开始评估')
-  } catch (e) {
-    setRecommendationEvaluating(id, false)
-    showNotice(e.message || '启动评估失败')
-  }
-}
-
-function toggleHistoryCollapsed() {
-  historyCollapsed.value = !historyCollapsed.value
-  storageSet('ui.historyCollapsed', historyCollapsed.value)
 }
 
 function openSettings() {

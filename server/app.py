@@ -19,7 +19,7 @@ from server.logging_config import configure_logging, new_request_id, request_id_
 from server import model_manager
 from server.bootstrap_cache import refresh_async as refresh_bootstrap_cache
 from server.status_builder import build_status_payload
-from server.secrets import get_secrets_mask
+from server.secrets import get_secrets_mask, save_deepseek_api_key
 from server.settings_store import AppSettings, editable_defaults, load_settings, update_settings
 from server.websocket_manager import ws_manager
 from server.idle_manager import idle_manager
@@ -29,6 +29,7 @@ from server.routes_logs import router as logs_router
 from server.routes_queue import router as queue_router
 from server.warmup import warmup
 from server.worker import worker_service
+from server.feishu_publish_queue import feishu_publish_queue
 
 logger = logging.getLogger("server.app")
 
@@ -94,7 +95,7 @@ class SettingsUpdate(BaseModel):
         default=None,
         pattern="^(deepseek-v4-pro|deepseek-v4-flash)$",
     )
-    recommendation_criteria: str | None = Field(default=None, min_length=20, max_length=50000)
+    auto_fallback_route: str | None = Field(default=None, pattern="^(ocr|asr)$")
     transcript_correction_prompt: str | None = Field(default=None, min_length=20, max_length=50000)
     polish_prompt_template: str | None = Field(default=None, min_length=20, max_length=100000)
     feishu_title_template: str | None = Field(default=None, min_length=1, max_length=500)
@@ -107,6 +108,10 @@ class SettingsUpdate(BaseModel):
         if value is not None and "{{body}}" not in value:
             raise ValueError("飞书正文模板必须包含 {{body}} 占位符")
         return value
+
+
+class DeepSeekKeyUpdate(BaseModel):
+    api_key: str = Field(min_length=8, max_length=500)
 
 
 @asynccontextmanager
@@ -130,6 +135,7 @@ async def lifespan(_app: FastAPI):
         logger.info("MODEL_LOAD_POLICY=lazy，首次任务时再加载模型")
 
     worker_service.start()
+    feishu_publish_queue.start()
     listener_manager.start()
     idle_manager.set_event_loop(loop)
     idle_manager.start()
@@ -141,6 +147,7 @@ async def lifespan(_app: FastAPI):
     idle_manager.stop()
     listener_manager.stop()
     worker_service.stop(timeout=30.0)
+    feishu_publish_queue.stop(timeout=5.0)
     logger.info("服务正在关闭")
 
 
@@ -199,6 +206,14 @@ def create_app() -> FastAPI:
     @api.get("/settings/secrets")
     async def get_settings_secrets() -> dict:
         return get_secrets_mask()
+
+    @api.put("/settings/deepseek-key")
+    async def put_deepseek_key(body: DeepSeekKeyUpdate) -> dict:
+        save_deepseek_api_key(body.api_key)
+        refresh_bootstrap_cache()
+        masked = get_secrets_mask()
+        await ws_manager.broadcast("settings.changed", load_settings().model_dump())
+        return masked
 
     @api.put("/settings")
     async def put_settings(body: SettingsUpdate) -> AppSettings:

@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import gc
+import importlib.metadata
 import json
 import logging
 import math
+import multiprocessing
 import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import config
 from server.transcript_routes import TranscriptSegment, clean_segment_text, normalize_segments
@@ -25,6 +28,8 @@ ProgressCallback = Callable[[float, dict[str, Any]], None]
 CancelCallback = Callable[[], bool]
 
 _OCR_LOCK = threading.Lock()
+_OCR_ENGINE_LOCK = threading.Lock()
+_SHARED_PROCESSOR: Any = None
 _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".flv", ".m4v", ".ts"}
 _TEXTISH_RE = re.compile(r"[\u3400-\u9fffA-Za-z]")
 _ONLY_SYMBOLS_RE = re.compile(r"^[\W_]+$", re.UNICODE)
@@ -211,11 +216,13 @@ def download_video_for_ocr(
     task_dir.mkdir(parents=True, exist_ok=True)
     site = detect_site(url)
     opts = _ydl_opts_for_site(site, download_stem=task_id)
+    max_height = max(360, int(getattr(config, "PADDLEOCR_VIDEO_MAX_HEIGHT", 480)))
     opts.update(
         {
             "format": (
-                "bestvideo[height<=720]+bestaudio/"
-                "best[height<=720]/bestvideo+bestaudio/best"
+                f"bestvideo[height<={max_height}]+bestaudio/"
+                f"best[height<={max_height}]/"
+                "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
             ),
             "outtmpl": str(task_dir / "source.%(ext)s"),
             "merge_output_format": "mp4",
@@ -325,8 +332,52 @@ class _OCRLine:
     box: tuple[float, float, float, float]
 
 
+def ocr_uses_gpu_runtime() -> bool:
+    """Detect the configured OCR backend without importing Paddle in Torch's process."""
+
+    device = str(getattr(config, "PADDLEOCR_DEVICE", "auto") or "auto").lower()
+    if device.startswith("gpu"):
+        return True
+    if device == "cpu":
+        return False
+    try:
+        importlib.metadata.version("paddlepaddle-gpu")
+        return True
+    except importlib.metadata.PackageNotFoundError:
+        return False
+
+
+def _isolate_paddleocr_model_sources() -> None:
+    """Keep PaddleX from importing ModelScope/Torch inside the OCR process."""
+
+    from types import ModuleType
+
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    if "modelscope" in sys.modules:
+        return
+    modelscope = ModuleType("modelscope")
+    modelscope.__path__ = []
+
+    def disabled_snapshot_download(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("OCR 独立进程已禁用 ModelScope；PP-OCRv5 应使用本地缓存或官方源")
+
+    modelscope.snapshot_download = disabled_snapshot_download
+    hub = ModuleType("modelscope.hub")
+    hub.__path__ = []
+    errors = ModuleType("modelscope.hub.errors")
+    modelscope.hub = hub
+    hub.errors = errors
+    sys.modules.update(
+        {
+            "modelscope": modelscope,
+            "modelscope.hub": hub,
+            "modelscope.hub.errors": errors,
+        }
+    )
+
+
 class PaddleOCRV5Processor:
-    """One task-scoped PP-OCRv5 engine reused for detection and full OCR."""
+    """Long-lived PP-OCRv5 engine reused across OCR tasks."""
 
     def __init__(self) -> None:
         try:
@@ -348,6 +399,9 @@ class PaddleOCRV5Processor:
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
+            "text_recognition_batch_size": max(
+                1, int(getattr(config, "PADDLEOCR_BATCH_SIZE", 8))
+            ),
             # PaddlePaddle 3.3.x on Windows can fail while converting oneDNN
             # attributes for PP-OCRv5. The regular CPU kernels are stable and
             # OCR is isolated from the existing FunASR GPU route anyway.
@@ -372,36 +426,179 @@ class PaddleOCRV5Processor:
         except Exception:
             pass
 
-    def recognize_lines(self, image_path: Path) -> list[_OCRLine]:
-        try:
-            with _OCR_LOCK:
-                results = list(self._engine.predict(str(image_path)))
-        except Exception as exc:
-            raise RuntimeError(f"PP-OCRv5 识别失败: {exc}") from exc
+    @staticmethod
+    def _parse_result(result: Any) -> list[_OCRLine]:
         lines: list[_OCRLine] = []
         threshold = float(getattr(config, "PADDLEOCR_MIN_SCORE", 0.62))
-        for result in results:
-            data = _result_mapping(result)
-            texts = _as_list(data.get("rec_texts"))
-            scores = _as_list(data.get("rec_scores"))
-            boxes = _as_list(data.get("rec_boxes")) or _as_list(data.get("rec_polys"))
-            for index, raw_text in enumerate(texts):
-                text = clean_segment_text(raw_text)
-                try:
-                    score = float(scores[index]) if index < len(scores) else 0.0
-                except (TypeError, ValueError):
-                    score = 0.0
-                box = _box_from_any(boxes[index]) if index < len(boxes) else None
-                if (
-                    not box
-                    or score < threshold
-                    or len(text) < 2
-                    or _ONLY_SYMBOLS_RE.match(text)
-                    or not _TEXTISH_RE.search(text)
-                ):
-                    continue
-                lines.append(_OCRLine(text=text, confidence=score, box=box))
+        data = _result_mapping(result)
+        texts = _as_list(data.get("rec_texts"))
+        scores = _as_list(data.get("rec_scores"))
+        boxes = _as_list(data.get("rec_boxes")) or _as_list(data.get("rec_polys"))
+        for index, raw_text in enumerate(texts):
+            text = clean_segment_text(raw_text)
+            try:
+                score = float(scores[index]) if index < len(scores) else 0.0
+            except (TypeError, ValueError):
+                score = 0.0
+            box = _box_from_any(boxes[index]) if index < len(boxes) else None
+            if (
+                not box
+                or score < threshold
+                or len(text) < 2
+                or _ONLY_SYMBOLS_RE.match(text)
+                or not _TEXTISH_RE.search(text)
+            ):
+                continue
+            lines.append(_OCRLine(text=text, confidence=score, box=box))
         return lines
+
+    def recognize_many(self, image_paths: Sequence[Path]) -> list[list[_OCRLine]]:
+        if not image_paths:
+            return []
+        try:
+            with _OCR_LOCK:
+                results = list(self._engine.predict([str(path) for path in image_paths]))
+        except Exception as exc:
+            raise RuntimeError(f"PP-OCRv5 识别失败: {exc}") from exc
+        parsed = [self._parse_result(result) for result in results]
+        if len(parsed) != len(image_paths):
+            raise RuntimeError(
+                f"PP-OCRv5 批量结果数量异常: 输入 {len(image_paths)}，输出 {len(parsed)}"
+            )
+        return parsed
+
+    def recognize_lines(self, image_path: Path) -> list[_OCRLine]:
+        return self.recognize_many([image_path])[0]
+
+
+def _ocr_process_main(connection) -> None:
+    processor: PaddleOCRV5Processor | None = None
+    try:
+        _isolate_paddleocr_model_sources()
+        processor = PaddleOCRV5Processor()
+        import paddle
+
+        connection.send({"ok": True, "device": paddle.device.get_device()})
+        while True:
+            request = connection.recv()
+            operation = request.get("operation")
+            if operation == "close":
+                connection.send({"ok": True})
+                return
+            if operation != "recognize_many":
+                connection.send({"ok": False, "error": "未知 OCR 子进程操作"})
+                continue
+            paths = [Path(value) for value in request.get("paths") or []]
+            try:
+                connection.send({"ok": True, "lines": processor.recognize_many(paths)})
+            except Exception as exc:
+                connection.send({"ok": False, "error": str(exc)})
+    except EOFError:
+        return
+    except Exception as exc:
+        try:
+            connection.send({"ok": False, "error": str(exc)})
+        except Exception:
+            pass
+    finally:
+        if processor is not None:
+            processor.close()
+        connection.close()
+
+
+class PaddleOCRProcessClient:
+    """Persistent GPU OCR worker isolated from the parent Torch DLL runtime."""
+
+    def __init__(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        parent, child = context.Pipe(duplex=True)
+        self._connection = parent
+        self._process = context.Process(
+            target=_ocr_process_main,
+            args=(child,),
+            name="paddleocr-gpu",
+            daemon=True,
+        )
+        self._process.start()
+        child.close()
+        if not parent.poll(180.0):
+            self.close()
+            raise PaddleOCRUnavailable("PaddleOCR GPU 子进程加载超时")
+        response = parent.recv()
+        if not response.get("ok"):
+            self.close()
+            raise PaddleOCRUnavailable(
+                f"PaddleOCR GPU 子进程加载失败: {response.get('error') or '未知错误'}"
+            )
+        self.device = str(response.get("device") or "gpu:0")
+        logger.info("常驻 PaddleOCR GPU 子进程已就绪 device=%s", self.device)
+
+    def recognize_many(self, image_paths: Sequence[Path]) -> list[list[_OCRLine]]:
+        if not image_paths:
+            return []
+        if not self._process.is_alive():
+            raise RuntimeError("PaddleOCR GPU 子进程已退出")
+        self._connection.send(
+            {"operation": "recognize_many", "paths": [str(path) for path in image_paths]}
+        )
+        if not self._connection.poll(300.0):
+            raise RuntimeError("PaddleOCR GPU 批量识别超时")
+        response = self._connection.recv()
+        if not response.get("ok"):
+            raise RuntimeError(response.get("error") or "PaddleOCR GPU 批量识别失败")
+        return response.get("lines") or []
+
+    def recognize_lines(self, image_path: Path) -> list[_OCRLine]:
+        return self.recognize_many([image_path])[0]
+
+    def close(self) -> None:
+        process = getattr(self, "_process", None)
+        connection = getattr(self, "_connection", None)
+        if process is None:
+            return
+        if process.is_alive() and connection is not None:
+            try:
+                connection.send({"operation": "close"})
+                if connection.poll(5.0):
+                    connection.recv()
+            except Exception:
+                pass
+        if connection is not None:
+            connection.close()
+        process.join(timeout=10.0)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5.0)
+        self._process = None
+        self._connection = None
+
+
+def get_ocr_processor() -> Any:
+    """Return the process-wide OCR engine, loading it only on first use."""
+
+    global _SHARED_PROCESSOR
+    if _SHARED_PROCESSOR is not None:
+        return _SHARED_PROCESSOR
+    with _OCR_ENGINE_LOCK:
+        if _SHARED_PROCESSOR is None:
+            logger.info("正在加载常驻 PaddleOCR PP-OCRv5 模型")
+            _SHARED_PROCESSOR = (
+                PaddleOCRProcessClient()
+                if ocr_uses_gpu_runtime()
+                else PaddleOCRV5Processor()
+            )
+        return _SHARED_PROCESSOR
+
+
+def release_ocr_processor() -> None:
+    """Explicitly release the shared OCR engine during maintenance/shutdown."""
+
+    global _SHARED_PROCESSOR
+    with _OCR_ENGINE_LOCK:
+        processor = _SHARED_PROCESSOR
+        _SHARED_PROCESSOR = None
+        if processor is not None:
+            processor.close()
 
 
 def _subtitle_text_for_frame(
@@ -469,17 +666,23 @@ def _subtitle_text_for_frame(
 def _frame_filter() -> str:
     crop_ratio = min(0.65, max(0.25, float(getattr(config, "PADDLEOCR_CROP_RATIO", 0.45))))
     y_ratio = 1.0 - crop_ratio
+    frame_width = max(640, int(getattr(config, "PADDLEOCR_FRAME_WIDTH", 960)))
     return (
         f"crop=iw:trunc(ih*{crop_ratio:.4f}/2)*2:0:trunc(ih*{y_ratio:.4f}/2)*2,"
-        "scale=1280:-2"
+        f"scale={frame_width}:-2"
     )
 
 
 def _scaled_frame_height(info: VideoInfo) -> int:
     if info.width <= 0 or info.height <= 0:
-        return 720
+        return 540
     crop_ratio = min(0.65, max(0.25, float(getattr(config, "PADDLEOCR_CROP_RATIO", 0.45))))
-    return max(2, int(round(1280 * info.height * crop_ratio / info.width / 2) * 2))
+    frame_width = max(640, int(getattr(config, "PADDLEOCR_FRAME_WIDTH", 960)))
+    return max(2, int(round(frame_width * info.height * crop_ratio / info.width / 2) * 2))
+
+
+def _frame_width() -> int:
+    return max(640, int(getattr(config, "PADDLEOCR_FRAME_WIDTH", 960)))
 
 
 def _extract_frame_at(video_path: str, timestamp: float, output: Path) -> None:
@@ -544,7 +747,7 @@ def detect_hard_subtitles(
                 continue
             candidate = _subtitle_text_for_frame(
                 processor.recognize_lines(frame),
-                frame_width=1280,
+                frame_width=_frame_width(),
                 frame_height=_scaled_frame_height(info),
             )
             if candidate and candidate[0]:
@@ -617,6 +820,57 @@ def _extract_frame_batch(
     return sorted(output_dir.glob("frame_*.jpg"))
 
 
+def _adaptive_frame_interval(duration_sec: float | None) -> float:
+    """Use 1 fps for short clips, 0.5 fps normally, and less for long videos."""
+
+    configured = max(
+        0.5, float(getattr(config, "PADDLEOCR_FRAME_INTERVAL_SEC", 2.0))
+    )
+    if duration_sec and duration_sec <= 90:
+        return min(configured, 1.0)
+    if duration_sec and duration_sec >= 1800:
+        return max(configured, 3.0)
+    return configured
+
+
+def _frame_dhash(image_path: Path) -> int | None:
+    """Return a compact perceptual hash for conservative adjacent-frame skips."""
+
+    try:
+        import cv2
+
+        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if image is None or image.size == 0:
+            return None
+        height, width = image.shape[:2]
+        # Ignore side overlays and focus on the central subtitle-bearing area.
+        image = image[:, int(width * 0.12) : max(int(width * 0.88), 1)]
+        image = cv2.resize(image, (17, 8), interpolation=cv2.INTER_AREA)
+        differences = image[:, 1:] > image[:, :-1]
+        value = 0
+        for bit in differences.reshape(-1):
+            value = (value << 1) | int(bool(bit))
+        return value
+    except Exception:
+        return None
+
+
+def _hash_distance(left: int | None, right: int | None) -> int | None:
+    if left is None or right is None:
+        return None
+    return (left ^ right).bit_count()
+
+
+def _recognize_many(
+    processor: PaddleOCRV5Processor,
+    image_paths: Sequence[Path],
+) -> list[list[_OCRLine]]:
+    recognize_many = getattr(processor, "recognize_many", None)
+    if callable(recognize_many):
+        return recognize_many(image_paths)
+    return [processor.recognize_lines(path) for path in image_paths]
+
+
 def extract_ocr_segments(
     video_path: str,
     processor: PaddleOCRV5Processor,
@@ -627,7 +881,11 @@ def extract_ocr_segments(
     """OCR the subtitle region at a configurable cadence and merge repeats."""
 
     info = probe_video(video_path)
-    interval = max(0.25, float(getattr(config, "PADDLEOCR_FRAME_INTERVAL_SEC", 1.0)))
+    interval = _adaptive_frame_interval(info.duration_sec)
+    inference_batch_size = max(1, int(getattr(config, "PADDLEOCR_BATCH_SIZE", 8)))
+    duplicate_threshold = max(
+        0, int(getattr(config, "PADDLEOCR_DUPLICATE_HASH_DISTANCE", 2))
+    )
     frames_dir = Path(video_path).parent / "ocr_frames"
     # Keep only a small window of frames on disk. This bounds storage for long
     # videos and gives cancellation a chance between (and during) FFmpeg batches.
@@ -640,7 +898,10 @@ def extract_ocr_segments(
     )
     segments: list[TranscriptSegment] = []
     processed_frames = 0
+    skipped_duplicate_frames = 0
     batch_index = 0
+    last_hash: int | None = None
+    last_candidate: tuple[str, float] | None = None
     try:
         while True:
             if cancelled and cancelled():
@@ -661,44 +922,82 @@ def extract_ocr_segments(
             )
             if not frames:
                 break
-            for frame_index, frame in enumerate(frames):
+            for chunk_start in range(0, len(frames), inference_batch_size):
                 if cancelled and cancelled():
                     raise OCRExtractionCancelled("任务已取消")
-                candidate = _subtitle_text_for_frame(
-                    processor.recognize_lines(frame),
-                    frame_width=1280,
-                    frame_height=_scaled_frame_height(info),
-                )
-                frame_start = start_sec + frame_index * interval
-                if candidate and candidate[0]:
-                    segments.append(
-                        TranscriptSegment(
-                            start_sec=frame_start,
-                            end_sec=frame_start + interval,
-                            text=candidate[0],
-                            confidence=candidate[1],
-                            source="ocr",
+                chunk = frames[chunk_start : chunk_start + inference_batch_size]
+                unique_frames: list[Path] = []
+                # Each entry points at a unique frame in this chunk. ``None``
+                # means the image is a duplicate of the previous batch's tail.
+                frame_sources: list[int | None] = []
+                frame_is_duplicate: list[bool] = []
+                for frame in chunk:
+                    current_hash = _frame_dhash(frame)
+                    distance = _hash_distance(last_hash, current_hash)
+                    duplicate = distance is not None and distance <= duplicate_threshold
+                    if duplicate:
+                        source = frame_sources[-1] if frame_sources else None
+                        skipped_duplicate_frames += 1
+                    else:
+                        source = len(unique_frames)
+                        unique_frames.append(frame)
+                    frame_sources.append(source)
+                    frame_is_duplicate.append(duplicate)
+                    last_hash = current_hash
+
+                line_batches = _recognize_many(processor, unique_frames)
+                candidates = [
+                    _subtitle_text_for_frame(
+                        lines,
+                        frame_width=_frame_width(),
+                        frame_height=_scaled_frame_height(info),
+                    )
+                    for lines in line_batches
+                ]
+
+                for local_index, frame in enumerate(chunk):
+                    source = frame_sources[local_index]
+                    if frame_is_duplicate[local_index]:
+                        candidate = last_candidate if source is None else candidates[source]
+                    else:
+                        candidate = candidates[source] if source is not None else None
+                        last_candidate = candidate
+                    frame_index = chunk_start + local_index
+                    frame_start = start_sec + frame_index * interval
+                    if candidate and candidate[0]:
+                        segments.append(
+                            TranscriptSegment(
+                                start_sec=frame_start,
+                                end_sec=frame_start + interval,
+                                text=candidate[0],
+                                confidence=candidate[1],
+                                source="ocr",
+                            )
                         )
-                    )
-                processed_frames += 1
-                try:
-                    frame.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                if progress:
-                    percent = (
-                        processed_frames / estimated_total * 100.0
-                        if estimated_total
-                        else min(99.0, batch_index * 5.0 + (frame_index + 1) / len(frames) * 5.0)
-                    )
-                    progress(
-                        min(100.0, percent),
-                        {
-                            "message": "PP-OCRv5 正在识别画面字幕",
-                            "processed_frames": processed_frames,
-                            "total_frames": estimated_total,
-                        },
-                    )
+                    processed_frames += 1
+                    try:
+                        frame.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    if progress:
+                        percent = (
+                            processed_frames / estimated_total * 100.0
+                            if estimated_total
+                            else min(
+                                99.0,
+                                batch_index * 5.0
+                                + (frame_index + 1) / len(frames) * 5.0,
+                            )
+                        )
+                        progress(
+                            min(100.0, percent),
+                            {
+                                "message": "PP-OCRv5 正在批量识别画面字幕",
+                                "processed_frames": processed_frames,
+                                "total_frames": estimated_total,
+                                "skipped_duplicate_frames": skipped_duplicate_frames,
+                            },
+                        )
             batch_index += 1
             if not info.duration_sec and len(frames) < batch_frame_count:
                 break
@@ -718,7 +1017,9 @@ def extract_ocr_segments(
             config, "PADDLEOCR_RECOGNITION_MODEL", "PP-OCRv5_mobile_rec"
         ),
         "ocr_frame_interval_sec": interval,
+        "ocr_batch_size": inference_batch_size,
         "ocr_frame_count": processed_frames,
+        "ocr_skipped_duplicate_frames": skipped_duplicate_frames,
         "ocr_segment_count": len(normalized),
     }
     return normalized, diagnostics

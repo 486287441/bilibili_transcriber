@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS history (
     processed_at TEXT NOT NULL,
     processing_duration_sec REAL,
     output_doc_url TEXT,
+    publish_status TEXT NOT NULL DEFAULT 'not_requested',
+    publish_error TEXT,
     output_text_path TEXT,
     local_audio_path TEXT,
     error_message TEXT,
@@ -63,6 +65,8 @@ class HistoryRow:
     output_text_path: str | None
     local_audio_path: str | None
     error_message: str | None
+    publish_status: str = "not_requested"
+    publish_error: str | None = None
     requested_route: RequestedRoute = "asr"
     resolved_route: ResolvedRoute | None = "asr"
     route_diagnostics: dict[str, Any] | None = None
@@ -85,6 +89,8 @@ class HistoryRow:
             "processed_at": self.processed_at,
             "processing_duration_sec": self.processing_duration_sec,
             "output_doc_url": self.output_doc_url,
+            "publish_status": self.publish_status,
+            "publish_error": self.publish_error,
             "output_text_path": self.output_text_path,
             "local_audio_path": self.local_audio_path,
             "error_message": self.error_message,
@@ -97,11 +103,6 @@ class HistoryRow:
         }
         if self.error_message:
             data["error_summary"] = summarize_task_error(self.error_message)
-        if self.status == "completed":
-            from server.article_store import load_polished
-            from server.recommendation import parse_recommendation
-
-            data["recommendation"] = parse_recommendation(load_polished(self.task_id))
         if include_text:
             from prompts import build_followup_article_message
             from server.article_store import load_polished
@@ -150,6 +151,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("raw_text_path", "TEXT"),
         ("source_segments_path", "TEXT"),
         ("parent_history_id", "TEXT"),
+        ("publish_status", "TEXT NOT NULL DEFAULT 'not_requested'"),
+        ("publish_error", "TEXT"),
     ):
         if col not in existing:
             conn.execute(f"ALTER TABLE history ADD COLUMN {col} {typ}")
@@ -161,6 +164,11 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE history SET resolved_route = 'asr'")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_history_url_key ON history(url_key)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_history_parent ON history(parent_history_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_history_publish ON history(publish_status)")
+    conn.execute(
+        "UPDATE history SET publish_status = 'published' "
+        "WHERE output_doc_url IS NOT NULL AND trim(output_doc_url) <> ''"
+    )
     rows = conn.execute(
         "SELECT id, url FROM history WHERE url_key IS NULL OR url_key = ''"
     ).fetchall()
@@ -199,6 +207,10 @@ def _row_from_sql(row: sqlite3.Row) -> HistoryRow:
         processed_at=row["processed_at"],
         processing_duration_sec=row["processing_duration_sec"],
         output_doc_url=row["output_doc_url"],
+        publish_status=(
+            row["publish_status"] if "publish_status" in keys else "not_requested"
+        ),
+        publish_error=row["publish_error"] if "publish_error" in keys else None,
         output_text_path=row["output_text_path"],
         local_audio_path=row["local_audio_path"],
         error_message=row["error_message"],
@@ -262,6 +274,9 @@ def upsert_from_task(
 ) -> HistoryRow:
     now = _now_iso()
     url_key = canonical_video_key(url)
+    publish_status = "published" if (output_doc_url or "").strip() else (
+        "pending" if status == "completed" else "not_requested"
+    )
     with _connect() as conn:
         existing = conn.execute(
             "SELECT id FROM history WHERE task_id = ?", (task_id,)
@@ -271,7 +286,13 @@ def upsert_from_task(
                 """
                 UPDATE history SET
                     status=?, processed_at=?, processing_duration_sec=?,
-                    output_doc_url=?, output_text_path=?, local_audio_path=?,
+                    output_doc_url=COALESCE(NULLIF(?, ''), output_doc_url),
+                    publish_status=CASE
+                        WHEN COALESCE(NULLIF(?, ''), output_doc_url) IS NOT NULL THEN 'published'
+                        WHEN publish_status IN ('published', 'publishing') THEN publish_status
+                        ELSE ?
+                    END,
+                    output_text_path=?, local_audio_path=?,
                     error_message=?, title=?, duration_sec=?, url_key=?,
                     requested_route=?, resolved_route=?, route_diagnostics=?,
                     raw_text_path=?, source_segments_path=?, parent_history_id=?
@@ -282,6 +303,8 @@ def upsert_from_task(
                     now,
                     processing_duration_sec,
                     output_doc_url,
+                    output_doc_url,
+                    publish_status,
                     output_text_path,
                     local_audio_path,
                     error_message,
@@ -305,10 +328,11 @@ def upsert_from_task(
                 INSERT INTO history (
                     id, task_id, url, title, duration_sec, site, source, status,
                     processed_at, processing_duration_sec, output_doc_url,
-                    output_text_path, local_audio_path, error_message, url_key,
+                    publish_status, publish_error, output_text_path,
+                    local_audio_path, error_message, url_key,
                     requested_route, resolved_route, route_diagnostics,
                     raw_text_path, source_segments_path, parent_history_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     hid,
@@ -322,6 +346,8 @@ def upsert_from_task(
                     now,
                     processing_duration_sec,
                     output_doc_url,
+                    publish_status,
+                    None,
                     output_text_path,
                     local_audio_path,
                     error_message,
@@ -344,6 +370,55 @@ def get_history(history_id: str) -> HistoryRow | None:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM history WHERE id = ?", (history_id,)).fetchone()
         return _row_from_sql(row) if row else None
+
+
+def get_history_by_task_id(task_id: str) -> HistoryRow | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM history WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        return _row_from_sql(row) if row else None
+
+
+def update_publish_state(
+    task_id: str,
+    status: str,
+    *,
+    output_doc_url: str | None = None,
+    error: str | None = None,
+) -> HistoryRow | None:
+    if status not in {"pending", "publishing", "published", "failed"}:
+        raise ValueError(f"不支持的飞书发布状态: {status}")
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE history SET
+                publish_status=?,
+                output_doc_url=COALESCE(NULLIF(?, ''), output_doc_url),
+                publish_error=?
+            WHERE task_id=?
+            """,
+            (status, output_doc_url, error, task_id),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM history WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        return _row_from_sql(row) if row else None
+
+
+def list_pending_publications(*, limit: int = 200) -> list[HistoryRow]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM history
+            WHERE status='completed' AND publish_status IN ('pending', 'publishing')
+            ORDER BY processed_at ASC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 1000)),),
+        ).fetchall()
+    return [_row_from_sql(row) for row in rows]
 
 
 def find_by_url(url: str) -> HistoryRow | None:

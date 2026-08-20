@@ -61,6 +61,37 @@ class HistoryService:
                 "parent_history_id": row.parent_history_id,
             },
         )
+        if row.status == "completed" and row.publish_status == "pending" and row.task_id:
+            from server.feishu_publish_queue import feishu_publish_queue
+
+            feishu_publish_queue.enqueue(row.task_id)
+        return row
+
+    def update_publish_state(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        output_doc_url: str | None = None,
+        error: str | None = None,
+    ) -> HistoryRow | None:
+        row = history_db.update_publish_state(
+            task_id,
+            status,
+            output_doc_url=output_doc_url,
+            error=error,
+        )
+        if row:
+            self._broadcast(
+                "history.publish_updated",
+                {
+                    "id": row.id,
+                    "task_id": task_id,
+                    "publish_status": row.publish_status,
+                    "publish_error": row.publish_error,
+                    "output_doc_url": row.output_doc_url,
+                },
+            )
         return row
 
     def get(self, history_id: str) -> HistoryRow:
@@ -75,6 +106,21 @@ class HistoryService:
         if polished:
             return polished
         raise FileNotFoundError("整理后文稿不可用")
+
+    def retry_publish(self, history_id: str) -> HistoryRow:
+        row = self.get(history_id)
+        if row.status != "completed" or not row.task_id:
+            raise ValueError("只有已完成且保留本地文稿的任务才能重试飞书发布")
+        if not load_polished(row.task_id):
+            raise FileNotFoundError("本地 Markdown 不存在，无法重试飞书发布")
+        if row.publish_status == "published":
+            return row
+
+        updated = self.update_publish_state(row.task_id, "pending") or row
+        from server.feishu_publish_queue import feishu_publish_queue
+
+        feishu_publish_queue.enqueue(row.task_id)
+        return updated
 
     def list(
         self,

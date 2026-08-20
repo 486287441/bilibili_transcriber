@@ -22,7 +22,7 @@ from server.pipeline_runner import (
     transcribe_with_progress,
 )
 from server.polish_estimate import estimate_input_tokens
-from server.settings_store import should_auto_open_feishu
+from server.settings_store import get_auto_fallback_route, should_auto_open_feishu
 from server.progress_tracker import progress_tracker
 from server.queue_db import TaskRow
 from server.queue_service import TaskNotFoundError, queue_service
@@ -109,6 +109,12 @@ class WorkerService:
             logger.warning("Worker 未在超时内结束，继续关闭")
         self._thread = None
         model_manager.unload_model(unload_source="shutdown")
+        try:
+            from server.video_ocr import release_ocr_processor
+
+            release_ocr_processor()
+        except Exception:
+            logger.exception("释放 PaddleOCR 常驻进程失败")
         set_processing(False)
         set_worker_state("idle")
 
@@ -418,9 +424,14 @@ class WorkerService:
         text_path = str(transcript_dir / f"{task.id}.txt")
 
         requested_route = normalize_requested_route(task.requested_route)
+        auto_fallback_route = get_auto_fallback_route()
+        effective_fallback_route = (
+            auto_fallback_route if requested_route == "auto" else requested_route
+        )
         diagnostics: dict = {
             "requested_route": requested_route,
             "decision_mode": "automatic" if requested_route == "auto" else "explicit",
+            "auto_fallback_route": auto_fallback_route,
         }
 
         self._append_queue_log("started", task)
@@ -455,8 +466,8 @@ class WorkerService:
             meta = {"title": task.title or "未命名视频", "url": task.url}
             segments: list[TranscriptSegment] = []
 
-            # Route 1: official Bilibili CC subtitles.  Non-Bilibili automatic
-            # tasks retain the old ASR behavior.
+            # Route 1: official Bilibili CC subtitles.  Other sites skip this
+            # probe and use the single fallback selected in settings.
             should_probe_subtitle = requested_route in {"auto", "subtitle"}
             if should_probe_subtitle:
                 if task.site != "bilibili":
@@ -464,7 +475,10 @@ class WorkerService:
                         raise TranscriptRouteUnavailable("B站字幕路线只支持 B 站视频")
                     diagnostics["platform_subtitle_skipped"] = "non_bilibili_site"
                 else:
-                    from server.bilibili_subtitles import fetch_bilibili_subtitles
+                    from server.bilibili_subtitles import (
+                        BilibiliSubtitleAuthError,
+                        fetch_bilibili_subtitles,
+                    )
 
                     progress_tracker.set_phase(task.id, "download")
                     progress_tracker.update(
@@ -474,6 +488,28 @@ class WorkerService:
                     )
                     try:
                         subtitle_result = fetch_bilibili_subtitles(task.url)
+                    except BilibiliSubtitleAuthError as exc:
+                        diagnostics.update(
+                            {
+                                "platform_subtitle_auth_failed": True,
+                                "platform_subtitle_probe_error": str(exc)[:500],
+                            }
+                        )
+                        progress_tracker.update(
+                            task.id,
+                            phase_progress=8.0,
+                            detail={
+                                "message": (
+                                    f"B站字幕鉴权失败，按设置切换{('画面 OCR' if auto_fallback_route == 'ocr' else '语音识别')}"
+                                    if requested_route == "auto"
+                                    else "B站字幕鉴权失败"
+                                ),
+                                "warning": str(exc),
+                            },
+                        )
+                        logger.warning("B站字幕鉴权失败 task_id=%s: %s", task.id, exc)
+                        if requested_route == "subtitle":
+                            raise TranscriptRouteUnavailable(str(exc)) from exc
                     except Exception as exc:
                         if requested_route == "subtitle":
                             raise RuntimeError(f"B站字幕检测失败: {exc}") from exc
@@ -515,11 +551,9 @@ class WorkerService:
                                 "该视频没有可用的 B 站字幕（登录 Cookie 可能是必需的）"
                             )
 
-            # Route 2: hard subtitles detected/extracted by PaddleOCR PP-OCRv5.
-            should_try_ocr = not segments and (
-                requested_route == "ocr"
-                or (requested_route == "auto" and task.site == "bilibili")
-            )
+            # Route 2: PaddleOCR PP-OCRv5.  Automatic mode uses exactly the
+            # fallback selected in settings; it never chains OCR then ASR.
+            should_try_ocr = not segments and effective_fallback_route == "ocr"
             if should_try_ocr:
                 t0 = time.monotonic()
                 video_file, video_meta, video_error = download_video_with_progress(
@@ -529,10 +563,7 @@ class WorkerService:
                     time.monotonic() - t0
                 )
                 if not (video_file and os.path.isfile(video_file) and video_meta):
-                    if requested_route == "ocr":
-                        raise RuntimeError(video_error or "下载 OCR 视频失败")
-                    diagnostics["ocr_video_download_error"] = video_error or "下载视频失败"
-                    logger.warning("OCR 视频下载失败，自动路线回落 ASR: %s", video_error)
+                    raise RuntimeError(video_error or "下载 OCR 视频失败")
                 else:
                     media_file = video_file
                     task, meta = self._apply_metadata(task, video_meta)
@@ -547,47 +578,27 @@ class WorkerService:
                     from server.video_ocr import (
                         OCRExtractionCancelled,
                         PaddleOCRUnavailable,
-                        PaddleOCRV5Processor,
-                        detect_hard_subtitles,
-                        extract_audio_from_video,
                         extract_ocr_segments,
+                        get_ocr_processor,
+                        ocr_uses_gpu_runtime,
                     )
 
                     processor = None
                     t0 = time.monotonic()
                     try:
-                        ocr_device = str(config.PADDLEOCR_DEVICE).lower()
-                        paddle_uses_gpu = ocr_device.startswith("gpu")
-                        if ocr_device == "auto":
-                            try:
-                                import paddle
-
-                                paddle_uses_gpu = paddle.device.is_compiled_with_cuda()
-                            except Exception:
-                                paddle_uses_gpu = False
+                        paddle_uses_gpu = ocr_uses_gpu_runtime()
                         if paddle_uses_gpu:
                             model_manager.unload_model(
                                 emit_event=True,
                                 unload_source="ocr_route",
                             )
-                        processor = PaddleOCRV5Processor()
-                        use_ocr = requested_route == "ocr"
-                        if requested_route == "auto":
-                            detection = detect_hard_subtitles(
-                                video_file,
-                                processor,
-                                duration_sec=task.duration_sec,
-                                progress=self._progress_callback(task.id, start=1.0, span=24.0),
-                                cancelled=lambda: self._stop_event.is_set()
-                                or queue_service.is_cancel_requested(task.id),
-                            )
-                            diagnostics.update(detection.to_dict())
-                            use_ocr = detection.found
-                            diagnostics["route_reason"] = (
-                                "hard_subtitle_detected"
-                                if use_ocr
-                                else "no_hard_subtitle_detected"
-                            )
+                        processor = get_ocr_processor()
+                        use_ocr = True
+                        diagnostics["route_reason"] = (
+                            "configured_ocr_fallback"
+                            if requested_route == "auto"
+                            else "explicit_ocr_route"
+                        )
 
                         if use_ocr:
                             diagnostics["resolved_route"] = "ocr"
@@ -596,8 +607,8 @@ class WorkerService:
                                 resolved_route="ocr",
                                 route_diagnostics=diagnostics,
                             )
-                            ocr_start = 25.0 if requested_route == "auto" else 1.0
-                            ocr_span = 75.0 if requested_route == "auto" else 99.0
+                            ocr_start = 1.0
+                            ocr_span = 99.0
                             segments, ocr_diagnostics = extract_ocr_segments(
                                 video_file,
                                 processor,
@@ -609,59 +620,26 @@ class WorkerService:
                             )
                             diagnostics.update(ocr_diagnostics)
                             if not segments:
-                                if requested_route == "ocr":
-                                    raise TranscriptRouteUnavailable(
-                                        "PP-OCRv5 未从画面底部识别到可用字幕"
-                                    )
-                                diagnostics["ocr_fallback_reason"] = "empty_ocr_result"
+                                raise TranscriptRouteUnavailable(
+                                    "PP-OCRv5 未从画面底部识别到可用字幕；自动模式不会再回落语音识别"
+                                )
                     except OCRExtractionCancelled as exc:
                         raise _TaskCancelled(str(exc)) from exc
                     except PaddleOCRUnavailable as exc:
-                        if requested_route == "ocr":
-                            raise TranscriptRouteUnavailable(str(exc)) from exc
-                        diagnostics["ocr_unavailable"] = str(exc)[:500]
-                        logger.warning("PP-OCRv5 不可用，自动路线回落 ASR: %s", exc)
+                        raise TranscriptRouteUnavailable(str(exc)) from exc
                     except TranscriptRouteUnavailable:
                         raise
                     except Exception as exc:
-                        if requested_route == "ocr":
-                            raise RuntimeError(f"PP-OCRv5 处理失败: {exc}") from exc
-                        diagnostics["ocr_processing_error"] = str(exc)[:500]
-                        logger.warning("PP-OCRv5 处理失败，自动路线回落 ASR: %s", exc)
+                        raise RuntimeError(f"PP-OCRv5 处理失败: {exc}") from exc
                     finally:
-                        if processor is not None:
-                            processor.close()
                         phase_times["transcribe"] = phase_times.get("transcribe", 0.0) + (
                             time.monotonic() - t0
                         )
 
-                    if not segments and requested_route == "auto":
-                        progress_tracker.update(
-                            task.id,
-                            phase_progress=30.0,
-                            detail={"message": "画面无可用字幕，正在提取音频"},
-                        )
-                        try:
-                            audio_file = extract_audio_from_video(
-                                video_file,
-                                task.id,
-                                cancelled=lambda: self._stop_event.is_set()
-                                or queue_service.is_cancel_requested(task.id),
-                            )
-                        except OCRExtractionCancelled as exc:
-                            raise _TaskCancelled(str(exc)) from exc
-                        except Exception as exc:
-                            # Keep the original ASR downloader as the final
-                            # compatibility fallback when the inspection video
-                            # happens to contain no usable audio stream.
-                            diagnostics["video_audio_extract_error"] = str(exc)[:500]
-                            audio_file = None
-
-            # Route 3: the original audio download + Fun-ASR-Nano path.  It is
-            # also the automatic fallback for non-Bilibili videos and for B站
-            # videos without usable soft/hard subtitles.
+            # Route 3: the original audio download + Fun-ASR-Nano path.  In
+            # automatic mode this runs only when ASR is the configured fallback.
             if not segments:
-                if requested_route in {"subtitle", "ocr"}:
+                if requested_route == "subtitle" or effective_fallback_route == "ocr":
                     raise TranscriptRouteUnavailable("所选路线没有生成可用文本")
                 if (
                     task.reprocess_mode == "transcribe_and_polish"
@@ -707,9 +685,8 @@ class WorkerService:
                 return
 
             task = queue_service.transition(task.id, "polishing")
-            # Close the transcribe->publish cancellation race.  Once this
-            # checkpoint passes, QueueService rejects new polishing cancels so
-            # an externally published document cannot become an orphan.
+            # Close the transcribe->polish cancellation race.  Once this
+            # checkpoint passes, the DeepSeek request is treated atomically.
             if self._check_cancelled(task):
                 return
             t0 = time.monotonic()
@@ -723,16 +700,15 @@ class WorkerService:
             phase_times["polish"] = time.monotonic() - t0
 
             if not ok:
-                final = queue_service.handle_failure(task.id, "发布失败（已执行回退流程）")
+                final = queue_service.handle_failure(task.id, "润色失败（已执行回退流程）")
                 self._finalize_task(task, final, started_at=started_mono, audio_file=audio_file)
                 return
 
             final = queue_service.complete(task.id, doc_url=doc_url or "", text_path=text_path)
             logger.info(
-                "处理完成 task_id=%s route=%s doc=%s",
+                "本地处理完成 task_id=%s route=%s，飞书将在后台发布",
                 task.id,
                 resolved_route,
-                doc_url,
             )
 
             try:
@@ -747,7 +723,7 @@ class WorkerService:
                 )
             except Exception:
                 # Metrics are observational.  Never turn a successfully
-                # published document back into a retryable task.
+                # generated local article back into a retryable task.
                 logger.exception("记录处理统计失败 task_id=%s", task.id)
             self._finalize_task(task, final, started_at=started_mono, audio_file=audio_file)
         except _TaskCancelled:
@@ -809,7 +785,7 @@ class WorkerService:
             input_is_trusted=True,
         )
         if not ok:
-            return queue_service.handle_failure(task.id, "发布失败（已执行回退流程）")
+            return queue_service.handle_failure(task.id, "润色失败（已执行回退流程）")
         return queue_service.complete(task.id, doc_url=doc_url or "", text_path=text_path)
 
 

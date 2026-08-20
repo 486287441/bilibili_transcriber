@@ -44,6 +44,10 @@ export const api = {
   settingsDefaults: () => request('/api/settings/defaults'),
   secrets: () => request('/api/settings/secrets'),
   updateSettings: (body) => request('/api/settings', { method: 'PUT', body: JSON.stringify(body) }),
+  updateDeepSeekKey: (apiKey) => request('/api/settings/deepseek-key', {
+    method: 'PUT',
+    body: JSON.stringify({ api_key: apiKey }),
+  }),
   polishedStorage: () => request('/api/storage/polished'),
   clearPolishedStorage: () => request('/api/storage/polished/clear', { method: 'POST' }),
   logs: () => request('/api/logs'),
@@ -68,12 +72,8 @@ export const api = {
   },
   historyDetail: (id) => request(`/api/history/${id}`),
   deleteHistory: (id) => request(`/api/history/${id}`, { method: 'DELETE' }),
-  reprocessHistory: (id, requestedRoute) => request(`/api/history/${id}/reprocess`, {
-    method: 'POST',
-    body: JSON.stringify({ requested_route: requestedRoute }),
-  }),
-  evaluateRecommendation: (id) =>
-    request(`/api/history/${id}/recommendation`, { method: 'POST' }),
+  retryHistoryPublish: (id) =>
+    request(`/api/history/${id}/retry-publish`, { method: 'POST' }),
   historyChat: (id, messages) =>
     request(`/api/history/${id}/chat`, { method: 'POST', body: JSON.stringify({ messages }) }),
   async *historyChatStream(id, messages) {

@@ -172,11 +172,13 @@ def polish_with_progress(
     open_browser: bool,
     input_is_trusted: bool = False,
 ) -> tuple[bool, str | None]:
-    from pipeline import publish_or_fallback_result
-
+    from pipeline import generate_local_article_result
     progress_tracker.set_phase(task_id, "polish")
     polish_chars = len(text)
-    progress_tracker.update(task_id, detail={"polish_chars": polish_chars})
+    progress_tracker.update(
+        task_id,
+        detail={"polish_chars": polish_chars},
+    )
 
     done = threading.Event()
     start = time.monotonic()
@@ -189,7 +191,10 @@ def polish_with_progress(
         )
 
         api_estimate = estimate_polish_time(polish_chars)
-        total_est = estimate_polish_seconds(polish_chars, use_mean_api=True)
+        total_est = estimate_polish_seconds(
+            polish_chars,
+            use_mean_api=True,
+        )
         while not done.wait(0.5):
             elapsed = time.monotonic() - start
             pct = polish_progress_percent(elapsed, api_estimate, total_sec=total_est)
@@ -198,11 +203,8 @@ def polish_with_progress(
     thread = threading.Thread(target=ticker, name=f"polish-progress-{task_id[:8]}", daemon=True)
     thread.start()
     try:
-        ok, doc_url = publish_or_fallback_result(
+        ok = generate_local_article_result(
             text,
-            title=title,
-            url=url,
-            open_browser=open_browser,
             task_id=task_id,
             input_is_trusted=input_is_trusted,
         )
@@ -210,4 +212,4 @@ def polish_with_progress(
         done.set()
         thread.join(timeout=1.0)
     progress_tracker.update(task_id, phase_progress=100.0)
-    return ok, doc_url
+    return ok, None

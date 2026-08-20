@@ -234,7 +234,7 @@ export const STATUS_LABELS = {
 }
 
 export const TRANSCRIPTION_ROUTE_OPTIONS = [
-  { value: 'auto', label: '自动判断' },
+  { value: 'auto', label: '官方字幕优先' },
   { value: 'subtitle', label: 'B站字幕' },
   { value: 'ocr', label: '画面 OCR' },
   { value: 'asr', label: '语音识别' },
@@ -262,9 +262,9 @@ export function effectiveTranscriptionRoute(item) {
 export function transcriptionRouteLabel(item) {
   const route = effectiveTranscriptionRoute(item)
   if (item?.requested_route === 'auto') {
-    return route ? `自动 · ${TRANSCRIPTION_ROUTE_LABELS[route] || route}` : '自动判断'
+    return route ? `字幕优先 · ${TRANSCRIPTION_ROUTE_LABELS[route] || route}` : '正在检测字幕'
   }
-  return TRANSCRIPTION_ROUTE_LABELS[route] || TRANSCRIPTION_ROUTE_LABELS[item?.requested_route] || '自动判断'
+  return TRANSCRIPTION_ROUTE_LABELS[route] || TRANSCRIPTION_ROUTE_LABELS[item?.requested_route] || '正在检测字幕'
 }
 
 export function transcriptionPhaseLabel(item) {
@@ -272,7 +272,7 @@ export function transcriptionPhaseLabel(item) {
   if (route === 'subtitle') return '字幕提取'
   if (route === 'ocr') return '画面 OCR'
   if (route === 'asr') return '语音转写'
-  return '路线判断'
+  return '字幕检测'
 }
 
 const SITE_HINTS = [

@@ -4,6 +4,23 @@
 >
 > 这份 README 主要写给能操作终端、文件和浏览器的 AI 助手。目标是：用户只需把 GitHub 链接交给 AI，AI 就能在用户的 Windows 电脑上完成部署、验证和排错。
 
+## 安装空间与硬件优先级
+
+本项目按 **NVIDIA CUDA 强制优先**设计。只要电脑存在 NVIDIA 显卡，Agent 就必须让 Fun-ASR 和 PaddleOCR 两个模型都使用 GPU；CUDA 不可用时应修复驱动和安装包，不能直接改走 CPU。只有确认电脑没有 NVIDIA 显卡时，才允许采用 CPU 路线。不得为了省事默认安装 CPU 版。
+
+首次完整安装建议目标磁盘至少预留 **15 GB**，推荐预留 **20 GB 以上**；处理视频还需要额外临时空间。当前版本的典型占用如下：
+
+| 内容 | 典型磁盘占用 | 说明 |
+| --- | ---: | --- |
+| Git 仓库源码 | 约 45 MB | 不含虚拟环境、模型、视频和日志。 |
+| Python CUDA 环境及依赖 | 约 8～10 GB | 当前实测 `.venv` 约 8.75 GB；PyTorch、Paddle GPU wheel 与版本会影响大小。 |
+| 前端依赖与构建产物 | 约 50～150 MB | 当前 `node_modules` 约 46 MB，整个 `web` 目录约 120 MB。 |
+| PP-OCRv5 OCR 模型 | 约 21 MB | [`PP-OCRv5_mobile_det`](https://paddlepaddle.github.io/PaddleOCR/main/en/version3.x/pipeline_usage/OCR.html) 约 4.7 MB，`PP-OCRv5_mobile_rec` 约 16 MB；缓存元数据会略增。 |
+| Fun-ASR-Nano-2512 | 约 2.15 GB | [官方模型页](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512)标注约 2.15 GB；另有约数 MB 的 VAD 模型，建议为 ASR 缓存预留至少 2.3 GB。 |
+| 项目完整基础安装 | 约 11～13 GB | 不含后续下载的视频、音频、转写稿、日志和重复缓存。 |
+
+GPU 建议使用 NVIDIA RTX 系列、可用显存至少 8 GB。Agent 必须分别验证 `torch.cuda.is_available()` 与 `paddle.device.is_compiled_with_cuda()`；两个结果都为 `True` 才算 CUDA 路线配置完成。模型大小会随上游版本更新而变化，以上是当前版本的部署预算，不是永久不变的精确值。
+
 ## 用户如何把任务交给 AI
 
 把下面这段话连同仓库链接发给 Codex、Claude Code、Cursor Agent 等能够实际操作电脑的 AI：
@@ -12,7 +29,7 @@
 请把这个项目部署到我的 Windows 电脑：
 https://github.com/486287441/bilibili_transcriber
 
-先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。请自行检查环境、安装依赖、构建前端、启动并验证服务，直到健康检查通过。遇到登录、授权、API Key、飞书知识库位置或私人选择时再让我操作；不要让我把密钥发到聊天里。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
+先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。请自行检查环境、安装依赖、配置并授权飞书 CLI、构建前端、启动并验证服务。服务打开后，引导我访问 DeepSeek Key 页面，并让我亲自在本机 Web 设置的“API 配置”中填写 Key 和选择模型；不要索要、读取或代填我的 Key。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
 ```
 
 如果不希望 AI 提交真实视频，再加一句：
@@ -33,14 +50,15 @@ https://github.com/486287441/bilibili_transcriber
 
 1. 项目位于确定、可长期保留的目录，而非临时目录。
 2. `.venv\Scripts\python.exe` 可用，Python 核心依赖能导入。
-3. PyTorch 已按 CPU 或 NVIDIA GPU 路线正确安装。
+3. 检测到 NVIDIA 显卡时，PyTorch 与 PaddlePaddle 必须都通过 CUDA 验证；只有确认没有 NVIDIA 显卡时才允许使用 CPU。
 4. FFmpeg 与 FFprobe 均能被程序找到。
 5. `web\dist\index.html` 已构建。
 6. 官方 `lark-cli` 已安装，并完成 user 身份授权。
-7. `.env` 的五项启动必填配置均非空，且秘密未出现在聊天、日志或 Git 中。
-8. `start.bat` 能启动服务。
-9. `/api/health` 返回 HTTP 200、`status: "ok"`、`ready: true`。
-10. `http://127.0.0.1:<端口>/` 能打开 Web 页面。
+7. 飞书知识库参数已经配置；用户已被引导在本机设置页亲自填写 DeepSeek API Key。
+8. Windows 启动文件夹中的 `哔哩哔哩 Transcriber.lnk` 已创建，且目标严格指向项目根目录的 `哔哩哔哩 Transcriber.exe`，工作目录与图标均正确。
+9. `start.bat` 能启动服务。
+10. `/api/health` 返回 HTTP 200、`status: "ok"`、`ready: true`。
+11. `http://127.0.0.1:<端口>/` 能打开 Web 页面。
 
 “执行过安装命令”不等于“部署完成”。必须检查退出码和最终状态。
 
@@ -50,26 +68,26 @@ https://github.com/486287441/bilibili_transcriber
 - 不得覆盖现有 `.env`；若它存在，只检查缺项，永远不要打印内容。
 - 不得删除或重建现有 `.venv`、`cookies`、`data`、`downloads`、`logs`，除非先解释原因并获得明确同意。
 - 不得对有本地改动的仓库执行 `git reset --hard`、`git clean -fd` 或强制 checkout。
-- 不得要求用户把 API Key、Cookie 或飞书 token 粘贴到聊天。让用户在本机编辑 `.env` 或在浏览器中授权。
+- 不得要求用户把 API Key、Cookie 或飞书 token 粘贴到聊天。DeepSeek Key 必须由用户亲自在本机 Web 设置页填写；Agent 只检查“已配置”状态。
 - 首次启动会自动注册 Windows 登录自启；启动前必须告知用户。
 - 真实 E2E 会下载视频与大模型、消耗 DeepSeek 额度并创建飞书文档。未经同意不要执行。
 - 分阶段执行并逐步验证；失败时读完整错误，不要机械重复同一命令。
 
 ### 最终报告必须包含
 
-安装目录、仓库版本、Python/Node/FFmpeg/lark-cli 版本、CPU/GPU 路线、服务 URL、健康检查结果、是否创建登录自启、是否运行真实视频测试，以及任何本地源码适配。
+安装目录、仓库版本、Python/Node/FFmpeg/lark-cli 版本、NVIDIA CUDA（或无 NVIDIA 时的 CPU）路线、服务 URL、健康检查结果、是否创建登录自启、是否运行真实视频测试，以及任何本地源码适配。
 
 ---
 
 ## 项目简介
 
-这是一个驻留在 Windows 本机的视频转文稿服务。用户可以在 Web 面板粘贴视频链接，也可以让服务监听系统剪贴板。任务会进入持久化队列，并按以下路线获取文本：
+这是一个驻留在 Windows 本机的视频转文稿服务。服务监听系统剪贴板中的视频链接，任务会进入持久化队列，并按以下路线获取文本：
 
 1. B 站官方 CC 字幕；
 2. PaddleOCR PP-OCRv5 识别画面硬字幕；
 3. yt-dlp + FFmpeg 下载音频，再用 Fun-ASR-Nano-2512 本地识别。
 
-之后程序调用 DeepSeek 做纠错、整理、总结和推荐评估，并通过 `lark-cli` 将 Markdown 写入指定飞书知识库。队列、历史、文稿和日志均保存在本机。
+之后程序调用 DeepSeek 做纠错、整理和总结，并通过 `lark-cli` 将 Markdown 写入指定飞书知识库。队列、历史、文稿和日志均保存在本机。
 
 支持 B 站（含 `b23.tv`）、YouTube（普通视频、Shorts、`youtu.be`）和抖音常见视频/笔记链接。
 
@@ -197,17 +215,9 @@ py -3.12 -m venv .venv
 
 若无 `py`，用已确认的官方 Python 3.12 绝对路径执行 `-m venv .venv`。后续始终显式调用项目解释器，无需激活。
 
-### 3. 单独安装 PyTorch
+### 3. 优先安装 CUDA 版 PyTorch
 
-`requirements.txt` 不包含 PyTorch。先运行 `nvidia-smi`。
-
-无 NVIDIA GPU 或优先兼容性：
-
-```powershell
-& .\.venv\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-```
-
-有受支持的 NVIDIA GPU，仓库当前建议 CUDA 12.4 wheel：
+`requirements.txt` 不包含 PyTorch。Agent 必须先运行 `nvidia-smi`；检测到 NVIDIA GPU 时，必须安装 CUDA wheel。仓库当前建议 CUDA 12.4：
 
 ```powershell
 & .\.venv\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
@@ -215,19 +225,46 @@ py -3.12 -m venv .venv
 
 PyTorch wheel 自带 CUDA runtime，通常无需另装 CUDA Toolkit。驱动不兼容时查看 [PyTorch 官方安装矩阵](https://pytorch.org/get-started/locally/)，不要强行修改源码的 `DEVICE`。
 
+只有确认没有 NVIDIA GPU 时，才安装 CPU wheel：
+
+```powershell
+& .\.venv\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
 ```powershell
 & .\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print('cuda=',torch.cuda.is_available()); print('runtime=',torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 ```
 
-### 4. 安装 Python 项目依赖
+### 4. 优先安装 GPU 版 Paddle，再安装项目依赖
+
+RTX / NVIDIA 环境必须先从 Paddle 官方 CUDA 12.6 索引安装 GPU 引擎：
+
+```powershell
+& .\.venv\Scripts\python.exe -m pip uninstall -y paddlepaddle
+& .\.venv\Scripts\python.exe -m pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+```
+
+只有确认没有 NVIDIA GPU 时，才安装 CPU 引擎：
+
+```powershell
+& .\.venv\Scripts\python.exe -m pip install paddlepaddle==3.3.0
+```
 
 ```powershell
 & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-& .\.venv\Scripts\python.exe -c "import torch,funasr,modelscope,paddle,paddleocr,yt_dlp,fastapi,uvicorn,openai,PIL; print('Python dependencies OK')"
+& .\.venv\Scripts\python.exe -c "import torch,funasr,modelscope,paddle,paddleocr,yt_dlp,fastapi,uvicorn,openai,PIL; print('Python dependencies OK'); print('paddle_cuda=', paddle.device.is_compiled_with_cuda())"
 & .\.venv\Scripts\python.exe -m pip check
 ```
 
-依赖体积较大，下载可能耗时。默认安装 CPU 版 PaddlePaddle；PyTorch 是否用 GPU 与之独立。
+NVIDIA 电脑还必须执行真实 OCR GPU 冒烟测试：
+
+```powershell
+& .\.venv\Scripts\python.exe .\scripts\test_ocr_gpu_runtime.py
+```
+
+输出必须同时满足 `"torch_cuda": true` 和 `"ocr_device": "gpu..."`。这一步会实际初始化 PP-OCRv5，比只检查 wheel 是否支持 CUDA 更可靠。
+
+依赖体积较大，下载可能耗时。PaddlePaddle 与 PyTorch 分别携带推理运行时，必须分别验证 GPU。NVIDIA 路线若任何一个 CUDA 检查或 OCR 冒烟测试失败，部署尚未完成，Agent 必须先排查 wheel、驱动和 CUDA 兼容性，不能静默退回 CPU。
 
 ### 5. 验证 FFmpeg
 
@@ -293,7 +330,7 @@ lark-cli wiki +node-list --as user --space-id my_library
 
 若当前版本不支持 `my_library`，从 space-list 获取真实 `space_id` 再查询。不要猜父节点 token；让用户选择目录，并从 JSON 或 Wiki URL 取得。
 
-### 8. 创建 `.env`
+### 8. 配置飞书目标知识库
 
 仅在文件不存在时复制：
 
@@ -301,22 +338,17 @@ lark-cli wiki +node-list --as user --space-id my_library
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-让用户在本机编辑器填写：
+Agent 根据上一步用户选择的知识库位置，在本机 `.env` 填写：
 
 ```dotenv
-DEEPSEEK_API_KEY=真实密钥
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-pro
 FEISHU_WIKI_SPACE_ID=目标知识库_space_id
 FEISHU_WIKI_PARENT_NODE_TOKEN=目标父目录_node_token
 ```
 
-DeepSeek Key 从 <https://platform.deepseek.com/> 获取。当前 Web 设置只允许 `deepseek-v4-pro` 与 `deepseek-v4-flash`；兼容网关使用其他模型名时，需要同步检查 `.env` 和 `server/settings_store.py` 的允许列表。
-
-只验证非空，不打印秘密：
+只验证飞书参数非空，不打印具体值：
 
 ```powershell
-& .\.venv\Scripts\python.exe -c "from dotenv import load_dotenv; import os; load_dotenv(); n=['DEEPSEEK_API_KEY','DEEPSEEK_BASE_URL','DEEPSEEK_MODEL','FEISHU_WIKI_SPACE_ID','FEISHU_WIKI_PARENT_NODE_TOKEN']; print({x:bool(os.getenv(x,'').strip()) for x in n})"
+& .\.venv\Scripts\python.exe -c "from dotenv import load_dotenv; import os; load_dotenv(); n=['FEISHU_WIKI_SPACE_ID','FEISHU_WIKI_PARENT_NODE_TOKEN']; print({x:bool(os.getenv(x,'').strip()) for x in n})"
 & .\.venv\Scripts\python.exe -c "import config; config.validate(); print('config OK')"
 ```
 
@@ -346,9 +378,23 @@ YTDLP_COOKIE_FILE_DOUYIN=cookies/www.douyin.com_cookies.txt
 
 该脚本可能启动 Chrome，需要用户参与。Cookie 等价于登录凭据，禁止提交、上传或贴入聊天。
 
-### 10. 首次启动
+### 10. 首次启动与强制开机自启
 
-先告知用户：启动时程序会创建登录自启快捷方式。
+本项目要求必须启用 Windows 登录自启，不能把它当作可选项。项目根目录必须包含：
+
+```text
+哔哩哔哩 Transcriber.exe
+favicon.ico
+launch_silent.vbs
+```
+
+启动服务时，程序会在 Windows 启动文件夹创建一个带图标的入口：
+
+```text
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\哔哩哔哩 Transcriber.lnk
+```
+
+该入口不是 Python、BAT 或 VBS 脚本；它的 `TargetPath` 必须直接指向项目根目录的 `哔哩哔哩 Transcriber.exe`，`WorkingDirectory` 必须是项目根目录，`IconLocation` 必须是项目根目录的 `favicon.ico`。这样 Windows“任务管理器 → 启动应用”会把它识别成有名称和图标的桌面程序。采用快捷方式指向项目 EXE，而不是把 EXE 二进制复制一份到 Startup，是因为启动器还需要同目录的 `launch_silent.vbs` 和项目文件；同时也避免升级后 Startup 中残留旧 EXE。
 
 ```powershell
 Set-Location $ProjectRoot
@@ -364,6 +410,24 @@ cmd /c "start.bat --clean"
 
 `--restart` 先停止再启动；`--clean` 清理旧版入口残留，仅在确有遗留问题时使用。脚本最多等待 300 秒健康就绪。
 
+首次启动后，Agent 必须主动校准并验收自启，不能只相信日志：
+
+```powershell
+& .\.venv\Scripts\python.exe -c "from server.autostart import ensure_autostart; print(ensure_autostart())"
+
+$Startup = [Environment]::GetFolderPath('Startup')
+$Link = Join-Path $Startup '哔哩哔哩 Transcriber.lnk'
+$Shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($Link)
+[pscustomobject]@{
+  Exists = Test-Path $Link
+  TargetPath = $Shortcut.TargetPath
+  WorkingDirectory = $Shortcut.WorkingDirectory
+  IconLocation = $Shortcut.IconLocation
+}
+```
+
+验收必须同时满足：`Exists=True`；目标是 `$ProjectRoot\哔哩哔哩 Transcriber.exe`；工作目录等于 `$ProjectRoot`；图标是 `$ProjectRoot\favicon.ico,0`。还应让用户打开“任务管理器 → 启动应用”，确认“哔哩哔哩 Transcriber”已启用且显示项目图标。任何一项不满足都不能宣布部署完成。
+
 诊断时前台运行：
 
 ```powershell
@@ -371,6 +435,13 @@ cmd /c "start.bat --clean"
 ```
 
 成功后用 `Ctrl+C` 停止。不要与 `start.bat` 同时运行。
+
+服务启动后，Agent 必须让用户本人完成 DeepSeek 配置：
+
+1. 引导用户打开 <https://platform.deepseek.com/api_keys> 创建或复制 API Key。
+2. 打开本机页面 <http://127.0.0.1:8765/>，点击右上角“设置”。
+3. 在左侧“API 配置”中，由用户亲自填写 DeepSeek API Key，并选择 `DeepSeek V4 Flash` 或 `DeepSeek V4 Pro`。
+4. Agent 只通过 `/api/settings/secrets` 确认 `deepseek_configured: true`，不得读取输入框、`.env` 内容或要求用户把 Key 发到聊天中。
 
 ### 11. 验收
 
@@ -388,7 +459,7 @@ Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing | Select-Object Sta
 {"status":"ok","version":"0.1.0","ready":true}
 ```
 
-`settings/secrets` 只返回配置掩码。页面应返回 HTTP 200。若 `.env` 使用其他端口，同步修改 `$Port`。最终让用户打开 `http://127.0.0.1:<端口>/`。
+`settings/secrets` 只返回配置掩码。页面应返回 HTTP 200，并且用户填写后 `deepseek_configured` 应为 `true`。若 `.env` 使用其他端口，同步修改 `$Port`。
 
 真实视频测试必须经用户同意；它会下载模型/视频、产生 API 费用并创建飞书文档。成功标准是任务最终完成、历史出现且飞书文档可打开，不只是“成功入队”。
 
@@ -402,7 +473,7 @@ Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing | Select-Object Sta
 | --- | --- | --- | --- |
 | `SERVER_HOST` | `127.0.0.1` | 否 | 入口会强制绑定本机。 |
 | `SERVER_PORT` | `8765` | 否 | Web/API 端口。 |
-| `DEEPSEEK_API_KEY` | 空 | 是 | DeepSeek/兼容 API Key。 |
+| `DEEPSEEK_API_KEY` | 空 | 润色前必填 | 用户通过本机设置页填写；Agent 不接触明文。 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | 是 | OpenAI 兼容基址。 |
 | `DEEPSEEK_MODEL` | `deepseek-v4-pro` | 是 | 初始模型；保存后的 Web 设置优先。 |
 | `FEISHU_WIKI_SPACE_ID` | 空 | 是 | 目标知识空间。 |
@@ -431,7 +502,11 @@ Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing | Select-Object Sta
 | `PADDLEOCR_DETECTION_MODEL` | `PP-OCRv5_mobile_det` | 检测模型。 |
 | `PADDLEOCR_RECOGNITION_MODEL` | `PP-OCRv5_mobile_rec` | 识别模型。 |
 | `PADDLEOCR_CROP_RATIO` | `0.45` | 分析画面底部比例，代码限制 0.25–0.65。 |
-| `PADDLEOCR_FRAME_INTERVAL_SEC` | `1.0` | 抽帧间隔，代码最小 0.25 秒。 |
+| `PADDLEOCR_FRAME_INTERVAL_SEC` | `2.0` | 常规抽帧间隔（0.5 fps）；短视频自动提高到 1 fps，超长视频降低到约 0.33 fps。 |
+| `PADDLEOCR_BATCH_SIZE` | `8` | 单次提交给 PP-OCRv5 的帧数。 |
+| `PADDLEOCR_DUPLICATE_HASH_DISTANCE` | `2` | 相邻帧感知哈希距离不超过此值时复用上帧结果。 |
+| `PADDLEOCR_FRAME_WIDTH` | `960` | FFmpeg 裁剪字幕区域后的缩放宽度。 |
+| `PADDLEOCR_VIDEO_MAX_HEIGHT` | `480` | OCR 检测视频的优先最高分辨率。 |
 | `PADDLEOCR_MIN_SCORE` | `0.62` | 置信度阈值。 |
 | `PADDLEOCR_DETECTION_SAMPLES` | `12` | 自动硬字幕探测采样数，代码至少取 6。 |
 
@@ -464,7 +539,7 @@ cmd /c "start.bat --restart"
 %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\哔哩哔哩 Transcriber.lnk
 ```
 
-仅删除快捷方式不是永久关闭，因为下次服务启动会重建。若用户不希望自启，需要修改 `server/app.py` 的自启调用或 `server/autostart.py` 策略。
+该快捷方式是项目的强制、自修复启动入口：仅删除它不是永久关闭，因为下次服务启动会重新创建。部署 Agent 不得把自启当成可选配置，也不得在交付时移除它。
 
 ## 数据与备份
 
@@ -497,7 +572,7 @@ cmd /c "start.bat --restart"
 & .\.venv\Scripts\python.exe -c "import config; config.validate()"
 ```
 
-检查 `.env` 是否在根目录及五项是否非空，不显示实际值。
+检查飞书知识库参数是否完整，不显示实际值。DeepSeek Key 不阻止服务启动；由用户在本机 Web 设置的“API 配置”中填写。
 
 ### 8765 端口占用
 
@@ -529,11 +604,11 @@ nvidia-smi
 & .\.venv\Scripts\python.exe -c "import sys,torch; print(sys.executable); print(torch.__version__,torch.version.cuda,torch.cuda.is_available())"
 ```
 
-确认使用项目解释器。DLL 错误常见于架构不一致、损坏 venv、缺 Visual C++ Runtime 或 CUDA wheel 不兼容；可先用 CPU wheel验证。
+确认使用项目解释器。DLL 错误常见于架构不一致、损坏 venv、缺 Visual C++ Runtime 或 CUDA wheel 不兼容。存在 NVIDIA 显卡时，应按官方兼容矩阵修复 CUDA wheel 或驱动，不得以安装 CPU wheel 作为永久规避方案；只有确认没有 NVIDIA 显卡时才走 CPU 路线。
 
 ### PaddleOCR 初始化失败
 
-默认是 CPU PaddlePaddle。若 `.env` 强制 `gpu:0` 却未装匹配的 `paddlepaddle-gpu`，先改回 `auto`/`cpu`。Paddle GPU 必须按其官方 CUDA/cuDNN 组合安装，不能照搬 PyTorch 版本。
+存在 NVIDIA 显卡时，必须安装匹配环境的 `paddlepaddle-gpu` 并让 OCR 使用 GPU。若 CUDA 初始化失败，应按 Paddle 官方 CUDA/cuDNN 兼容组合修复驱动和 wheel，不能照搬 PyTorch 的版本选择，也不能降级 CPU。只有确认没有 NVIDIA 显卡时，才安装 `paddlepaddle` CPU 版并显式使用 CPU。
 
 ### 模型加载卡住
 
@@ -631,12 +706,12 @@ cmd /c "start.bat --restart"
 仓库版本：<commit hash 或 ZIP>
 系统：<Windows 版本/架构>
 Python：<版本和虚拟环境路径>
-计算路线：CPU / NVIDIA GPU（显卡名、torch CUDA 是否可用）
+计算路线：NVIDIA CUDA / 无 NVIDIA 时 CPU（显卡名、torch CUDA 与 Paddle CUDA 是否可用）
 Node.js：<版本>
 FFmpeg / FFprobe：<版本或路径>
 lark-cli：<版本、user 授权是否通过>
 前端构建：<是否存在 web/dist/index.html>
-配置验证：<五项是否均为 true，不显示值>
+配置验证：<飞书是否可用；DeepSeek 是否显示已配置，不显示任何秘密>
 服务地址：http://127.0.0.1:<端口>/
 健康检查：<HTTP、status、ready>
 登录自启：<已创建 / 未创建 / 未验证>

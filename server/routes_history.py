@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Literal
 
@@ -14,7 +13,6 @@ from server.history_service import history_service
 from server.queue_service import DuplicateTaskError, queue_service
 
 router = APIRouter(prefix="/api")
-_recommendation_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 class ReprocessBody(BaseModel):
@@ -64,6 +62,28 @@ async def delete_history_item(history_id: str) -> dict[str, str]:
         ) from exc
 
 
+@router.post("/history/{history_id}/retry-publish", status_code=202)
+async def retry_history_publish(history_id: str) -> dict[str, str | None]:
+    try:
+        row = history_service.retry_publish(history_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "历史记录不存在", "code": "NOT_FOUND"},
+        ) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": str(exc), "code": "TEXT_UNAVAILABLE"},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": str(exc), "code": "NOT_PUBLISHABLE"},
+        ) from exc
+    return {"status": row.publish_status, "task_id": row.task_id}
+
+
 @router.post("/history/{history_id}/reprocess", status_code=201)
 async def reprocess_history(history_id: str, body: ReprocessBody) -> dict[str, Any]:
     try:
@@ -102,70 +122,6 @@ async def reprocess_history(history_id: str, body: ReprocessBody) -> dict[str, A
         "requested_route": task.requested_route,
         "status": task.status,
     }
-
-
-async def _evaluate_history_recommendation(history_id: str, task_id: str) -> None:
-    from deepseek_client import evaluate_recommendation
-    from server.article_store import load_polished, save_polished
-    from server.bootstrap_cache import refresh_async
-    from server.recommendation import replace_recommendation
-    from server.websocket_manager import ws_manager
-
-    try:
-        article = load_polished(task_id)
-        if not article:
-            raise FileNotFoundError("整理后文稿不可用")
-        section = await asyncio.to_thread(evaluate_recommendation, article)
-        updated = replace_recommendation(article, section)
-        save_polished(task_id, updated)
-        refresh_async()
-        await ws_manager.broadcast(
-            "history.recommendation_completed", {"id": history_id}
-        )
-    except Exception as exc:
-        await ws_manager.broadcast(
-            "history.recommendation_failed",
-            {"id": history_id, "error": str(exc) or "推荐指数评估失败"},
-        )
-
-
-@router.post("/history/{history_id}/recommendation", status_code=202)
-async def evaluate_history_recommendation(history_id: str) -> dict[str, str]:
-    import config
-
-    if not config.DEEPSEEK_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "未配置 DeepSeek API Key", "code": "DEEPSEEK_NOT_CONFIGURED"},
-        )
-    try:
-        row = history_service.get(history_id)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "历史记录不存在", "code": "NOT_FOUND"},
-        ) from exc
-    if not row.task_id:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "整理后文稿不可用", "code": "TEXT_UNAVAILABLE"},
-        )
-    try:
-        history_service.get_article_text(history_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": str(exc) or "整理后文稿不可用", "code": "TEXT_UNAVAILABLE"},
-        ) from exc
-
-    running = _recommendation_tasks.get(history_id)
-    if running and not running.done():
-        return {"status": "evaluating"}
-
-    task = asyncio.create_task(_evaluate_history_recommendation(history_id, row.task_id))
-    _recommendation_tasks[history_id] = task
-    task.add_done_callback(lambda _task: _recommendation_tasks.pop(history_id, None))
-    return {"status": "evaluating"}
 
 
 def _chat_context(history_id: str, body: ChatBody) -> tuple[str, list[dict[str, str]]]:

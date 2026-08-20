@@ -12,7 +12,7 @@ from prompts import build_polish_user_message, render_polish_system
 from server.settings_store import (
     get_deepseek_model,
     get_polish_prompt_template,
-    get_recommendation_criteria,
+    get_transcript_correction_prompt,
 )
 
 # Chinese-heavy transcript ≈ 1.6 chars per token (empirical default).
@@ -94,18 +94,26 @@ def resolve_model_profile(
 
 
 def estimate_input_tokens(polish_chars: int) -> int:
+    transcript_chars = max(0, polish_chars)
     template_chars = len(build_polish_user_message(""))
-    system_prompt = render_polish_system(
-        get_polish_prompt_template(),
-        get_recommendation_criteria(),
+    system_prompt = render_polish_system(get_polish_prompt_template())
+    # Strict mode sends the full transcript twice: correction, then organization.
+    total_chars = (
+        len(get_transcript_correction_prompt())
+        + transcript_chars
+        + len(system_prompt)
+        + template_chars
+        + transcript_chars
     )
-    total_chars = len(system_prompt) + template_chars + max(0, polish_chars)
     return max(1, int(total_chars / CHARS_PER_TOKEN))
 
 
-def estimate_output_tokens(polish_chars: int) -> tuple[int, float]:
+def estimate_output_tokens(
+    polish_chars: int,
+) -> tuple[int, float]:
     body_chars = max(0, polish_chars) * OUTPUT_EXPANSION
     output_chars = body_chars + OUTPUT_OVERHEAD_CHARS
+    output_chars += max(0, polish_chars)  # first correction call
     mean = max(64, int(output_chars / CHARS_PER_TOKEN))
     std = max(32.0, mean * OUTPUT_TOKENS_STD_RATIO)
     return mean, std
@@ -127,7 +135,8 @@ def estimate_polish_time(
     )
     profile = MODEL_PROFILES[profile_model]["provider"][provider]
 
-    ttft = profile["ttft_base"] + (input_tokens / 1000.0) * profile["ttft_per_1k_token"]
+    calls = 2
+    ttft = calls * profile["ttft_base"] + (input_tokens / 1000.0) * profile["ttft_per_1k_token"]
     tps = profile["output_tps"]
     gen_time_mean = output_mean / tps
     total_mean = ttft + gen_time_mean
@@ -139,6 +148,7 @@ def estimate_polish_time(
     return {
         "model": profile_model,
         "provider": provider,
+        "api_calls": calls,
         "input_tokens": input_tokens,
         "output_tokens_mean": output_mean,
         "ttft_sec": round(ttft, 3),

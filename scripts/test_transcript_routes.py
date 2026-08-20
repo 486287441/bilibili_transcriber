@@ -135,6 +135,26 @@ def test_choose_subtitle_track_filters_danmaku_and_prefers_chinese() -> None:
     assert selected == ("zh-Hans", manual_chinese)
 
 
+def test_choose_subtitle_track_prefers_ai_zh_over_other_ai_languages() -> None:
+    tracks = {
+        language: [{"ext": "srt", "data": language}]
+        for language in ("ai-ar", "ai-en", "ai-es", "ai-ja", "ai-pt", "ai-zh")
+    }
+
+    selected = choose_subtitle_track(tracks)
+
+    assert selected == ("ai-zh", {"ext": "srt", "data": "ai-zh"})
+
+
+def test_choose_subtitle_track_prefers_ai_zh_over_ai_en_when_both_present() -> None:
+    chinese = {"ext": "srt", "data": "中文"}
+    english = {"ext": "srt", "data": "english"}
+
+    selected = choose_subtitle_track({"ai-en": [english], "ai-zh": [chinese]})
+
+    assert selected == ("ai-zh", chinese)
+
+
 def test_choose_subtitle_track_prefers_embedded_data_and_rejects_xml() -> None:
     remote = {"ext": "srt", "url": "https://subtitle.example/remote.srt"}
     embedded = {"ext": "srt", "data": "embedded subtitle"}
@@ -225,6 +245,8 @@ def main() -> int:
         test_parse_bilibili_json_cues,
         test_parse_json3_and_generic_millisecond_cues,
         test_choose_subtitle_track_filters_danmaku_and_prefers_chinese,
+        test_choose_subtitle_track_prefers_ai_zh_over_other_ai_languages,
+        test_choose_subtitle_track_prefers_ai_zh_over_ai_en_when_both_present,
         test_choose_subtitle_track_prefers_embedded_data_and_rejects_xml,
         test_normalize_segments_sorts_and_merges_rolling_captions,
         test_normalize_segments_deduplicates_ocr_jitter_by_confidence,

@@ -19,6 +19,8 @@ __pycache__/
 *.so
 .Python
 .venv/
+/.cache/
+/tools/lark-cli/
 venv/
 env/
 *.egg-info/

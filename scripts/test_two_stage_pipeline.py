@@ -29,16 +29,10 @@ sys.modules.setdefault(
     "server.settings_store",
     SimpleNamespace(
         get_deepseek_model=lambda: "test-model",
-        get_polish_prompt_template=lambda: "第二阶段 {{recommendation_criteria}}",
-        get_recommendation_criteria=lambda: "推荐规则",
+        get_polish_prompt_template=lambda: "第二阶段内容整理",
         get_transcript_correction_prompt=lambda: "第一阶段测试 Prompt",
     ),
 )
-sys.modules.setdefault(
-    "server.recommendation",
-    SimpleNamespace(normalize_recommendation=lambda value: value),
-)
-
 from deepseek_client import process_transcript
 from prompts import TRANSCRIPT_CORRECTION_SYSTEM, render_polish_system
 from transcript_processing import remove_asr_punctuation
@@ -68,7 +62,7 @@ def test_two_separate_deepseek_calls() -> None:
     calls: list[dict] = []
     outputs = iter([
         "第一阶段：可信逐字稿。",
-        "# 推荐指数\n\n# 视频总结\n总结\n\n# 目录\n\n# 原文\n可信逐字稿。",
+        "# 视频总结\n总结\n\n# 目录\n\n# 原文\n可信逐字稿。",
     ])
 
     def create(**kwargs):
@@ -81,14 +75,12 @@ def test_two_separate_deepseek_calls() -> None:
         patch("deepseek_client._client", return_value=fake_client),
         patch("deepseek_client.get_deepseek_model", return_value="test-model"),
         patch("deepseek_client.get_transcript_correction_prompt", return_value=TRANSCRIPT_CORRECTION_SYSTEM),
-        patch("deepseek_client.get_polish_prompt_template", return_value="第二阶段 {{recommendation_criteria}}"),
-        patch("deepseek_client.get_recommendation_criteria", return_value="推荐规则"),
-        patch("server.recommendation.normalize_recommendation", side_effect=lambda value: value),
+        patch("deepseek_client.get_polish_prompt_template", return_value="第二阶段内容整理"),
     ):
         trusted, article = process_transcript("版本GPT-5，数值3.5。")
 
     assert trusted == "第一阶段：可信逐字稿。"
-    assert article.startswith("# 推荐指数")
+    assert article.startswith("# 视频总结")
     assert len(calls) == 2
     assert calls[0]["messages"][0]["content"] == TRANSCRIPT_CORRECTION_SYSTEM
     assert calls[0]["messages"][1]["content"] == "版本GPT-5数值3.5"
@@ -97,8 +89,9 @@ def test_two_separate_deepseek_calls() -> None:
 
 def test_persisted_legacy_second_stage_prompt_is_upgraded() -> None:
     legacy = "前文\n**步骤 B — 纠错与整理**\n旧纠错规则\n**步骤 C — 章节划分原则**\n后文"
-    rendered = render_polish_system(legacy, "推荐规则")
-    assert "**步骤 B — 保留可信逐字稿**" in rendered
+    rendered = render_polish_system(legacy)
+    assert "输入是已校对的可信逐字稿" in rendered
+    assert "不再纠错、润色或改写" in rendered
     assert "旧纠错规则" not in rendered
     assert "**步骤 C — 章节划分原则**" in rendered
 

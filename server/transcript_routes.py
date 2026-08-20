@@ -237,6 +237,19 @@ def parse_subtitle_payload(
     return parse_srt_or_vtt(text, source=source)
 
 
+def _subtitle_language_key(language: str) -> tuple[str, bool]:
+    """Normalize Bilibili/yt-dlp language codes like ``ai-zh`` for ranking."""
+
+    raw = language.lower().replace("_", "-")
+    automated = any(marker in raw for marker in ("ai", "auto", "machine"))
+    lang = raw
+    for prefix in ("ai-", "auto-", "machine-"):
+        if lang.startswith(prefix):
+            lang = lang[len(prefix) :]
+            break
+    return lang, automated
+
+
 def choose_subtitle_track(
     subtitles: Mapping[str, Sequence[Mapping[str, Any]]] | None,
 ) -> tuple[str, Mapping[str, Any]] | None:
@@ -246,10 +259,9 @@ def choose_subtitle_track(
         return None
 
     def language_rank(language: str) -> tuple[int, str]:
-        lang = language.lower().replace("_", "-")
+        lang, automated = _subtitle_language_key(language)
         if lang == "danmaku":
-            return (10_000, lang)
-        automated = any(marker in lang for marker in ("ai", "auto", "machine"))
+            return (10_000, language.lower())
         if lang in {"zh-hans", "zh-cn", "zh-sg"}:
             base = 0
         elif lang == "zh" or lang.startswith("zh-"):
@@ -258,7 +270,7 @@ def choose_subtitle_track(
             base = 4
         else:
             base = 20
-        return (base + (10 if automated else 0), lang)
+        return (base + (10 if automated else 0), language.lower())
 
     candidates: list[tuple[tuple[int, str], int, str, Mapping[str, Any]]] = []
     for language, tracks in subtitles.items():

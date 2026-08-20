@@ -19,18 +19,16 @@ from server.settings_store import AppSettings, editable_defaults
 
 def test_editable_defaults() -> None:
     defaults = editable_defaults()
-    assert "全文软广" in defaults["recommendation_criteria"]
     assert "恢复说话人最可能的原话" in defaults["transcript_correction_prompt"]
-    assert "{{recommendation_criteria}}" in defaults["polish_prompt_template"]
+    assert "# 视频总结" in defaults["polish_prompt_template"]
+    assert "推荐指数" not in defaults["polish_prompt_template"]
     assert "{{body}}" in defaults["feishu_document_template"]
     assert AppSettings().feishu_title_template == "{{date}} {{title}}"
 
 
 def test_prompt_rendering() -> None:
-    assert render_polish_system("前文\n{{recommendation_criteria}}\n后文", "推荐规则") == (
-        "前文\n推荐规则\n后文"
-    )
-    assert render_polish_system("前文", "推荐规则") == "前文\n\n推荐规则"
+    assert render_polish_system("前文\n{{recommendation_criteria}}\n后文") == "前文\n\n后文"
+    assert render_polish_system("前文") == "前文"
 
 
 def test_feishu_template_rendering() -> None:

@@ -15,6 +15,7 @@ _SETTINGS_PATH = config.PROJECT_ROOT / "data" / "settings.json"
 _lock = threading.Lock()
 
 DEEPSEEK_MODELS = ("deepseek-v4-pro", "deepseek-v4-flash")
+AUTO_FALLBACK_ROUTES = ("ocr", "asr")
 
 DEFAULT_FEISHU_TITLE_TEMPLATE = "{{date}} {{title}}"
 DEFAULT_FEISHU_DOCUMENT_TEMPLATE = """{{body}}
@@ -35,12 +36,6 @@ def _default_deepseek_model() -> str:
     if model in DEEPSEEK_MODELS:
         return model
     return "deepseek-v4-pro"
-
-
-def _default_recommendation_criteria() -> str:
-    from prompts import VIDEO_RECOMMENDATION_RULES
-
-    return VIDEO_RECOMMENDATION_RULES
 
 
 def _default_polish_prompt_template() -> str:
@@ -64,11 +59,7 @@ class AppSettings(BaseModel):
         default_factory=_default_deepseek_model,
         pattern="^(deepseek-v4-pro|deepseek-v4-flash)$",
     )
-    recommendation_criteria: str = Field(
-        default_factory=_default_recommendation_criteria,
-        min_length=20,
-        max_length=50000,
-    )
+    auto_fallback_route: str = Field(default="asr", pattern="^(ocr|asr)$")
     transcript_correction_prompt: str = Field(
         default_factory=_default_transcript_correction_prompt,
         min_length=20,
@@ -97,7 +88,6 @@ class AppSettings(BaseModel):
     )
 
     @field_validator(
-        "recommendation_criteria",
         "transcript_correction_prompt",
         "polish_prompt_template",
         "feishu_title_template",
@@ -106,6 +96,13 @@ class AppSettings(BaseModel):
     @classmethod
     def _strip_editable_text(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("polish_prompt_template", mode="after")
+    @classmethod
+    def _migrate_retired_polish_rules(cls, value: str) -> str:
+        from prompts import render_polish_system
+
+        return render_polish_system(value)
 
     @field_validator("feishu_document_template")
     @classmethod
@@ -154,8 +151,8 @@ def get_deepseek_model() -> str:
     return load_settings().deepseek_model
 
 
-def get_recommendation_criteria() -> str:
-    return load_settings().recommendation_criteria
+def get_auto_fallback_route() -> str:
+    return load_settings().auto_fallback_route
 
 
 def get_transcript_correction_prompt() -> str:
@@ -168,7 +165,6 @@ def get_polish_prompt_template() -> str:
 
 def editable_defaults() -> dict[str, str]:
     return {
-        "recommendation_criteria": _default_recommendation_criteria(),
         "transcript_correction_prompt": _default_transcript_correction_prompt(),
         "polish_prompt_template": _default_polish_prompt_template(),
         "feishu_title_template": DEFAULT_FEISHU_TITLE_TEMPLATE,

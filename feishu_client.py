@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import config
@@ -19,11 +21,47 @@ _MAX_WIKI_TITLE_LEN = 100
 
 
 def _lark_executable() -> str:
+    configured = (getattr(config, "LARK_CLI_PATH", "") or "").strip()
+    if configured:
+        path = Path(configured).expanduser()
+        if path.is_file():
+            return str(path.resolve())
+        raise FeishuError(f"LARK_CLI_PATH 指向的文件不存在：{configured}")
+
+    bundled = config.PROJECT_ROOT / "tools" / "lark-cli" / "bin" / "lark-cli.exe"
+    if bundled.is_file():
+        return str(bundled.resolve())
+
     for name in ("lark-cli.cmd", "lark-cli", "lark-cli.exe"):
         path = shutil.which(name)
         if path:
             return path
-    raise FeishuError("未找到 lark-cli，请先安装并完成 lark-cli auth login。")
+
+    # Windows background services often start with a reduced PATH that omits
+    # npm's per-user global bin directory.  Resolve that stable location
+    # directly so CLI availability does not depend on how the server started.
+    appdata = (os.environ.get("APPDATA") or "").strip()
+    candidates: list[Path] = []
+    if appdata:
+        candidates.extend(
+            Path(appdata) / "npm" / filename
+            for filename in ("lark-cli.cmd", "lark-cli.exe", "lark-cli")
+        )
+    candidates.extend(
+        Path.home() / "AppData" / "Roaming" / "npm" / filename
+        for filename in ("lark-cli.cmd", "lark-cli.exe", "lark-cli")
+    )
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate.resolve())
+        except OSError:
+            continue
+
+    searched = str(Path(appdata) / "npm") if appdata else "用户 npm 全局目录"
+    raise FeishuError(
+        f"未找到 lark-cli（已检查 PATH 和 {searched}），请安装 @larksuite/cli。"
+    )
 
 
 class FeishuError(Exception):

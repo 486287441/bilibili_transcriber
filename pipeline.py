@@ -45,7 +45,29 @@ def postprocess_and_publish(
     input_is_trusted: bool = False,
     task_id: str | None = None,
 ) -> tuple[str, str, str]:
-    """Run the two DeepSeek stages and create one Feishu doc per video."""
+    """Run the strict DeepSeek flow and create one Feishu doc per video."""
+    body_md, trusted_text = postprocess_article(
+        raw_text,
+        task_id=task_id,
+        input_is_trusted=input_is_trusted,
+    )
+    print("[飞书] 创建视频文档...")
+    doc_url = create_video_document(
+        title=title,
+        url=url,
+        transcribed_at=datetime.now(),
+        body_md=body_md,
+    )
+    return doc_url, body_md, trusted_text
+
+
+def postprocess_article(
+    raw_text: str,
+    *,
+    input_is_trusted: bool = False,
+    task_id: str | None = None,
+) -> tuple[str, str]:
+    """Generate the final Markdown locally without waiting for Feishu."""
     if input_is_trusted:
         trusted_text = raw_text.strip()
     else:
@@ -56,16 +78,39 @@ def postprocess_and_publish(
         transcript_path.parent.mkdir(parents=True, exist_ok=True)
         transcript_path.write_text(trusted_text.strip() + "\n", encoding="utf-8")
 
-    print("[DeepSeek] 生成推荐指数、总结、目录与章节中...")
+    print("[DeepSeek] 生成总结、目录与章节中...")
     body_md = organize_transcript(trusted_text)
-    print("[飞书] 创建视频文档...")
-    doc_url = create_video_document(
-        title=title,
-        url=url,
-        transcribed_at=datetime.now(),
-        body_md=body_md,
-    )
-    return doc_url, body_md, trusted_text
+    return body_md, trusted_text
+
+
+def generate_local_article_result(
+    raw_text: str,
+    *,
+    task_id: str,
+    input_is_trusted: bool = False,
+) -> bool:
+    """Generate and persist Markdown; publishing is intentionally out of band."""
+    backup_transcript(raw_text)
+    try:
+        body_md, _trusted_text = postprocess_article(
+            raw_text,
+            task_id=task_id,
+            input_is_trusted=input_is_trusted,
+        )
+    except DeepSeekError as exc:
+        print(f"\n[失败] 润色失败: {exc}")
+        fallback_to_doubao(raw_text)
+        return False
+    except Exception as exc:
+        print(f"\n[失败] 未预期错误: {exc}")
+        fallback_to_doubao(raw_text)
+        return False
+
+    from server.article_store import save_polished
+
+    article_path = save_polished(task_id, body_md)
+    print(f"\n[完成] 本地 Markdown 已生成:\n   {article_path}")
+    return True
 
 
 def fallback_to_doubao(raw_text: str) -> None:

@@ -26,6 +26,11 @@ _CHROME_CANDIDATES = (
 )
 _DEBUG_PORT = int(os.getenv("CHROME_DEBUG_PORT", "9222"))
 _YOUTUBE_HINTS = ("youtube.com", "youtu.be", "google.com")
+_SITE_OPEN_URLS = {
+    "youtube": "https://www.youtube.com/",
+    "bilibili": "https://www.bilibili.com/",
+    "douyin": "https://www.douyin.com/",
+}
 
 
 def _chrome_exe() -> Path | None:
@@ -79,9 +84,15 @@ def _ensure_chrome_debugging(url: str = "https://www.youtube.com/") -> None:
     )
 
 
-def _pick_target(targets: list[dict]) -> dict:
+def _pick_target(targets: list[dict], *, site: str) -> dict:
+    hints = {
+        "youtube": ("youtube.com", "youtu.be"),
+        "bilibili": ("bilibili.com", "b23.tv"),
+        "douyin": ("douyin.com",),
+    }.get(site, ())
     for target in targets:
-        if target.get("type") == "page" and "youtube.com" in (target.get("url") or ""):
+        url = (target.get("url") or "").lower()
+        if target.get("type") == "page" and any(hint in url for hint in hints):
             return target
     for target in targets:
         if target.get("type") == "page":
@@ -141,17 +152,44 @@ def _to_netscape(cookies: list[dict], *, site: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _validate_bilibili_login(cookies: list[dict]) -> None:
+    matched = [c for c in cookies if _matches_site(c.get("domain") or "", "bilibili")]
+    names = {str(cookie.get("name") or "") for cookie in matched}
+    if "SESSDATA" not in names:
+        raise RuntimeError("Chrome 中没有有效的 B站登录 Cookie（缺少 SESSDATA）。")
+    cookie_header = "; ".join(
+        f"{cookie.get('name')}={cookie.get('value')}"
+        for cookie in matched
+        if cookie.get("name") and cookie.get("value") is not None
+    )
+    request = urllib.request.Request(
+        "https://api.bilibili.com/x/web-interface/nav",
+        headers={
+            "Cookie": cookie_header,
+            "Referer": "https://www.bilibili.com/",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception as exc:
+        raise RuntimeError(f"无法验证 B站 Cookie：{exc}") from exc
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or data.get("isLogin") is not True:
+        raise RuntimeError("Chrome 中的 B站会话也已失效，请先登录 bilibili.com 后再导出。")
+
+
 def export_site_cookies(site: str, *, open_url: str | None = None) -> Path:
     """Export cookies for *site* to cookies/www.<site>_cookies.txt."""
-    if site == "youtube":
-        open_url = open_url or "https://www.youtube.com/"
-    _ensure_chrome_debugging(open_url or "https://www.youtube.com/")
+    open_url = open_url or _SITE_OPEN_URLS.get(site, "https://www.youtube.com/")
+    _ensure_chrome_debugging(open_url)
 
     targets = _fetch_json(f"http://127.0.0.1:{_DEBUG_PORT}/json/list")
     if not isinstance(targets, list):
         raise RuntimeError("读取 Chrome 调试目标失败。")
 
-    target = _pick_target(targets)
+    target = _pick_target(targets, site=site)
     ws_url = target.get("webSocketDebuggerUrl")
     if not ws_url:
         raise RuntimeError("Chrome 页面未提供 webSocketDebuggerUrl。")
@@ -172,6 +210,8 @@ def export_site_cookies(site: str, *, open_url: str | None = None) -> Path:
                 "Chrome 中未检测到 YouTube 登录态（缺少 LOGIN_INFO）。"
                 "请先在 Chrome 打开 youtube.com 并确认已登录。"
             )
+    elif site == "bilibili":
+        _validate_bilibili_login(matched)
 
     filename = {
         "youtube": "www.youtube.com_cookies.txt",

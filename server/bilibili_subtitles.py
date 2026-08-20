@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -25,6 +26,24 @@ class BilibiliSubtitleResult:
     @property
     def found(self) -> bool:
         return bool(self.segments)
+
+
+class BilibiliSubtitleAuthError(RuntimeError):
+    """The configured Bilibili session is missing or no longer logged in."""
+
+
+def _bilibili_login_state(ydl) -> bool | None:
+    """Ask Bilibili whether yt-dlp's current cookie jar is authenticated."""
+
+    try:
+        with ydl.urlopen("https://api.bilibili.com/x/web-interface/nav") as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(data, Mapping) or "isLogin" not in data:
+        return None
+    return bool(data.get("isLogin"))
 
 
 def _unwrap_video_info(info: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -87,10 +106,18 @@ def fetch_bilibili_subtitles(url: str) -> BilibiliSubtitleResult:
                 if str(language).lower() != "danmaku"
             )
             if not selected:
+                login_state = _bilibili_login_state(ydl)
+                if login_state is False:
+                    raise BilibiliSubtitleAuthError(
+                        "B站字幕鉴权失败：Cookie 未配置、已过期或登录会话已失效"
+                    )
                 return BilibiliSubtitleResult(
                     **meta,
                     diagnostics={
                         "platform_subtitle_found": False,
+                        "subtitle_auth_status": (
+                            "authenticated" if login_state is True else "unknown"
+                        ),
                         "available_subtitle_languages": available,
                     },
                 )
@@ -113,6 +140,7 @@ def fetch_bilibili_subtitles(url: str) -> BilibiliSubtitleResult:
                 **meta,
                 diagnostics={
                     "platform_subtitle_found": bool(segments),
+                    "subtitle_auth_status": "usable",
                     "subtitle_language": language,
                     "subtitle_format": str(track.get("ext") or "unknown"),
                     "subtitle_segment_count": len(segments),
