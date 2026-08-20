@@ -1,4 +1,17 @@
 # Bilibili Transcriber — AI 部署手册
+## 用户如何把任务交给 AI
+
+把下面这段话连同仓库链接发给 Codex、Claude Code、Cursor Agent 等能够实际操作电脑的 AI：
+
+```text
+请把这个项目部署到我的 Windows 电脑：
+https://github.com/486287441/bilibili_transcriber
+
+先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。请自行检查环境、安装依赖、配置并授权飞书 CLI、构建前端、启动并验证服务。不要配置或启用 OCR，自动模式在没有官方字幕时使用 ASR。服务打开后，引导我访问 DeepSeek Key 页面，并让我亲自在本机 Web 设置的“API 配置”中填写 Key 和选择模型；不要索要、读取或代填我的 Key。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
+```
+
+
+---
 
 
 ## 安装空间与硬件优先级
@@ -19,24 +32,6 @@
 
 GPU 建议使用 NVIDIA RTX 系列、可用显存至少 8 GB。Agent 必须验证 `torch.cuda.is_available()` 为 `True`，才算 NVIDIA CUDA 路线配置完成。无需检查 PaddlePaddle。模型大小会随上游版本更新而变化，以上是当前版本的部署预算，不是永久不变的精确值。
 
-## 用户如何把任务交给 AI
-
-把下面这段话连同仓库链接发给 Codex、Claude Code、Cursor Agent 等能够实际操作电脑的 AI：
-
-```text
-请把这个项目部署到我的 Windows 电脑：
-https://github.com/486287441/bilibili_transcriber
-
-先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。请自行检查环境、安装依赖、配置并授权飞书 CLI、构建前端、启动并验证服务。不要配置或启用 OCR，自动模式在没有官方字幕时使用 ASR。服务打开后，引导我访问 DeepSeek Key 页面，并让我亲自在本机 Web 设置的“API 配置”中填写 Key 和选择模型；不要索要、读取或代填我的 Key。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
-```
-
-如果不希望 AI 提交真实视频，再加一句：
-
-```text
-只做无副作用的健康检查，不要运行真实视频 E2E，也不要创建测试飞书文档。
-```
-
----
 
 ## AI 部署协议
 
