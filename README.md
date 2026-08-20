@@ -1,8 +1,5 @@
 # Bilibili Transcriber — AI 部署手册
 
-> 仓库：<https://github.com/486287441/bilibili_transcriber>
->
-> 这份 README 主要写给能操作终端、文件和浏览器的 AI 助手。目标是：用户只需把 GitHub 链接交给 AI，AI 就能在用户的 Windows 电脑上完成部署、验证和排错。
 
 ## 安装空间与硬件优先级
 
