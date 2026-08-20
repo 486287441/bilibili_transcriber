@@ -94,7 +94,13 @@ def resolve_model_profile(
 
 
 def estimate_input_tokens(polish_chars: int) -> int:
+    from server.settings_store import is_second_stage_enabled
+
     transcript_chars = max(0, polish_chars)
+    if not is_second_stage_enabled():
+        total_chars = len(get_transcript_correction_prompt()) + transcript_chars
+        return max(1, int(total_chars / CHARS_PER_TOKEN))
+
     template_chars = len(build_polish_user_message(""))
     system_prompt = render_polish_system(get_polish_prompt_template())
     # Strict mode sends the full transcript twice: correction, then organization.
@@ -111,6 +117,12 @@ def estimate_input_tokens(polish_chars: int) -> int:
 def estimate_output_tokens(
     polish_chars: int,
 ) -> tuple[int, float]:
+    from server.settings_store import is_second_stage_enabled
+
+    if not is_second_stage_enabled():
+        mean = max(64, int(max(0, polish_chars) / CHARS_PER_TOKEN))
+        return mean, max(32.0, mean * OUTPUT_TOKENS_STD_RATIO)
+
     body_chars = max(0, polish_chars) * OUTPUT_EXPANSION
     output_chars = body_chars + OUTPUT_OVERHEAD_CHARS
     output_chars += max(0, polish_chars)  # first correction call
@@ -135,7 +147,9 @@ def estimate_polish_time(
     )
     profile = MODEL_PROFILES[profile_model]["provider"][provider]
 
-    calls = 2
+    from server.settings_store import is_second_stage_enabled
+
+    calls = 2 if is_second_stage_enabled() else 1
     ttft = calls * profile["ttft_base"] + (input_tokens / 1000.0) * profile["ttft_per_1k_token"]
     tps = profile["output_tps"]
     gen_time_mean = output_mean / tps

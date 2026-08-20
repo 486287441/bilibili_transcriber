@@ -12,6 +12,7 @@ import pyperclip
 from deepseek_client import DeepSeekError, correct_transcript, organize_transcript
 from feishu_client import FeishuError, create_video_document
 from prompts import build_doubao_prompt
+from server.settings_store import is_second_stage_enabled
 
 DOUBAO_URL = "https://www.doubao.com/"
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -100,8 +101,12 @@ def postprocess_article(
         transcript_path.parent.mkdir(parents=True, exist_ok=True)
         transcript_path.write_text(trusted_text.strip() + "\n", encoding="utf-8")
 
-    print("[DeepSeek] 生成总结、目录与章节中...")
-    body_md = organize_transcript(trusted_text)
+    if is_second_stage_enabled():
+        print("[DeepSeek] 生成总结、目录与章节中...")
+        body_md = organize_transcript(trusted_text)
+    else:
+        print("[DeepSeek] 第二阶段已关闭，直接使用第一阶段结果。")
+        body_md = trusted_text
     _check_cancelled(cancelled)
     return body_md, trusted_text
 

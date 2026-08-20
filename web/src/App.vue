@@ -75,6 +75,7 @@ const settings = ref({
   model_idle_timeout_minutes: 30,
   deepseek_model: 'deepseek-v4-pro',
   auto_fallback_route: 'asr',
+  second_stage_enabled: true,
 })
 const secrets = ref({})
 const serviceStatus = ref({ model_loaded: false, model_loading: false })

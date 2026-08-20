@@ -1601,6 +1601,78 @@ dialog.modal-backdrop-in::backdrop {
   font-size: 12px;
 }
 
+.stage-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 92px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--ivory);
+  color: var(--stone);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.stage-switch:hover:not(:disabled) {
+  border-color: var(--brand-light);
+  color: var(--brand);
+}
+
+.stage-switch[aria-checked='true'] {
+  border-color: rgba(48, 111, 78, 0.28);
+  background: rgba(48, 111, 78, 0.07);
+  color: var(--ok);
+}
+
+.stage-switch-track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background-color 160ms ease;
+}
+
+.stage-switch-track i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--ivory);
+  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.2);
+  transition: transform 160ms ease;
+}
+
+.stage-switch[aria-checked='true'] .stage-switch-track {
+  background: var(--ok);
+}
+
+.stage-switch[aria-checked='true'] .stage-switch-track i {
+  transform: translateX(11px);
+}
+
+.second-stage-disabled-note {
+  display: grid;
+  min-height: 190px;
+  place-items: center;
+  padding: 24px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--parchment);
+  color: var(--stone);
+  font-size: 13px;
+  text-align: center;
+}
+
+.second-stage-message {
+  margin: 10px 0 0;
+}
+
 .prompt-workspace textarea {
   display: block;
   width: 100%;

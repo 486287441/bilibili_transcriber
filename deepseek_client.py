@@ -16,6 +16,7 @@ from server.settings_store import (
     get_deepseek_model,
     get_polish_prompt_template,
     get_transcript_correction_prompt,
+    is_second_stage_enabled,
 )
 
 _TIMEOUT_SECONDS = 120.0
@@ -110,7 +111,8 @@ def process_transcript(
 ) -> tuple[str, str]:
     """Run the strict two-stage flow; return trusted text and article Markdown."""
     trusted_text = (raw_text or "").strip() if input_is_trusted else correct_transcript(raw_text)
-    return trusted_text, organize_transcript(trusted_text)
+    article = organize_transcript(trusted_text) if is_second_stage_enabled() else trusted_text
+    return trusted_text, article
 
 
 def polish_and_summarize(

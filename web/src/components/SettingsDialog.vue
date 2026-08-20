@@ -79,7 +79,7 @@
                 <strong>第一阶段</strong><small>ASR 校对</small>
               </button>
               <button type="button" role="tab" :aria-selected="activePromptStage === 'second'" :class="{ active: activePromptStage === 'second' }" @click="activePromptStage = 'second'">
-                <strong>第二阶段</strong><small>内容整理</small>
+                <strong>第二阶段</strong><small>{{ secondStageEnabled ? '内容整理' : '已关闭' }}</small>
               </button>
             </div>
 
@@ -100,9 +100,24 @@
             <section v-else class="prompt-workspace" role="tabpanel">
               <div class="prompt-workspace-heading">
                 <div><h3>第二阶段 · 内容整理 Prompt</h3><p>用于生成总结、目录和章节。</p></div>
+                <button
+                  type="button"
+                  class="stage-switch"
+                  role="switch"
+                  :aria-checked="secondStageEnabled"
+                  :disabled="saving === 'second-stage'"
+                  @click="toggleSecondStage"
+                >
+                  <span class="stage-switch-track" aria-hidden="true"><i /></span>
+                  <span>{{ secondStageEnabled ? '已启用' : '已关闭' }}</span>
+                </button>
               </div>
-              <textarea class="ui-scroll" v-model="advanced.polish_prompt_template" rows="12" spellcheck="false" aria-label="第二阶段内容整理 Prompt" />
-              <div class="prompt-workspace-footer">
+              <textarea v-if="secondStageEnabled" class="ui-scroll" v-model="advanced.polish_prompt_template" rows="12" spellcheck="false" aria-label="第二阶段内容整理 Prompt" />
+              <div v-else class="second-stage-disabled-note">
+                第一阶段完成后将直接生成文章，不再发起第二次 DeepSeek 请求。
+              </div>
+              <p v-if="messages.polish && !secondStageEnabled" class="storage-message second-stage-message" role="status">{{ messages.polish }}</p>
+              <div v-if="secondStageEnabled" class="prompt-workspace-footer">
                 <div class="editor-actions">
                   <button type="button" :disabled="saving === 'polish'" @click="savePolishPrompt">{{ saving === 'polish' ? '保存中…' : '保存第二阶段' }}</button>
                   <button type="button" class="ghost" @click="restorePolishPrompt">恢复默认</button>
@@ -185,10 +200,12 @@ const advancedDefaults = reactive({
 })
 const advanced = reactive({ ...advancedDefaults })
 const messages = reactive({ apiKey: '', correction: '', polish: '' })
+const secondStageEnabled = ref(true)
 
 function syncPromptDrafts() {
   advanced.transcript_correction_prompt = props.settings.transcript_correction_prompt || advancedDefaults.transcript_correction_prompt || ''
   advanced.polish_prompt_template = props.settings.polish_prompt_template || advancedDefaults.polish_prompt_template || ''
+  secondStageEnabled.value = props.settings.second_stage_enabled !== false
 }
 
 async function loadPromptDefaults() {
@@ -280,6 +297,23 @@ async function updateDeepseekModel(model) {
   if (model === props.settings.deepseek_model) return
   await api.updateSettings({ deepseek_model: model })
   emit('refresh')
+}
+
+async function toggleSecondStage() {
+  if (saving.value) return
+  const previous = secondStageEnabled.value
+  secondStageEnabled.value = !previous
+  saving.value = 'second-stage'
+  messages.polish = ''
+  try {
+    await api.updateSettings({ second_stage_enabled: secondStageEnabled.value })
+    emit('refresh')
+  } catch (error) {
+    secondStageEnabled.value = previous
+    messages.polish = error.message || '第二阶段设置保存失败'
+  } finally {
+    saving.value = ''
+  }
 }
 
 async function savePrompt(kind, payload) {

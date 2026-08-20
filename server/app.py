@@ -96,6 +96,7 @@ class SettingsUpdate(BaseModel):
         pattern="^(deepseek-v4-pro|deepseek-v4-flash)$",
     )
     auto_fallback_route: str | None = Field(default=None, pattern="^(ocr|asr)$")
+    second_stage_enabled: bool | None = None
     transcript_correction_prompt: str | None = Field(default=None, min_length=20, max_length=50000)
     polish_prompt_template: str | None = Field(default=None, min_length=20, max_length=100000)
     feishu_title_template: str | None = Field(default=None, min_length=1, max_length=500)

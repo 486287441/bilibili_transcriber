@@ -31,6 +31,7 @@ sys.modules.setdefault(
         get_deepseek_model=lambda: "test-model",
         get_polish_prompt_template=lambda: "第二阶段内容整理",
         get_transcript_correction_prompt=lambda: "第一阶段测试 Prompt",
+        is_second_stage_enabled=lambda: True,
     ),
 )
 from deepseek_client import process_transcript, stream_chat_about_article
@@ -91,6 +92,28 @@ def test_two_separate_deepseek_calls() -> None:
     )
 
 
+def test_second_stage_can_be_disabled() -> None:
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        message = SimpleNamespace(content="第一阶段：可直接发布的完整转写稿。")
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    with (
+        patch("deepseek_client._client", return_value=fake_client),
+        patch("deepseek_client.get_deepseek_model", return_value="test-model"),
+        patch("deepseek_client.get_transcript_correction_prompt", return_value=TRANSCRIPT_CORRECTION_SYSTEM),
+        patch("deepseek_client.is_second_stage_enabled", return_value=False),
+    ):
+        trusted, article = process_transcript("没有标点的原始字幕")
+
+    assert trusted == "第一阶段：可直接发布的完整转写稿。"
+    assert article == trusted
+    assert len(calls) == 1
+
+
 def test_followup_explicitly_disables_thinking() -> None:
     calls: list[dict] = []
 
@@ -130,6 +153,7 @@ if __name__ == "__main__":
     test_first_stage_prompt_contract()
     test_remove_only_natural_language_punctuation()
     test_two_separate_deepseek_calls()
+    test_second_stage_can_be_disabled()
     test_followup_explicitly_disables_thinking()
     test_persisted_legacy_second_stage_prompt_is_upgraded()
     print("two-stage pipeline tests PASS")
