@@ -3,20 +3,21 @@
 
 ## 安装空间与硬件优先级
 
-本项目按 **NVIDIA CUDA 强制优先**设计。只要电脑存在 NVIDIA 显卡，Agent 就必须让 Fun-ASR 和 PaddleOCR 两个模型都使用 GPU；CUDA 不可用时应修复驱动和安装包，不能直接改走 CPU。只有确认电脑没有 NVIDIA 显卡时，才允许采用 CPU 路线。不得为了省事默认安装 CPU 版。
+本项目公开部署按 **Fun-ASR 的 NVIDIA CUDA 强制优先**设计。只要电脑存在 NVIDIA 显卡，Agent 就必须让 Fun-ASR 使用 GPU；CUDA 不可用时应修复驱动和 PyTorch 安装包，不能直接改走 CPU。只有确认电脑没有 NVIDIA 显卡时，才允许采用 CPU 路线。不得为了省事默认安装 CPU 版。
+
+> **公开部署暂不启用 OCR：** 仓库仍保留实验性的画面 OCR 源码，供作者本地继续评估，但它不属于当前对外支持的部署路线。部署 Agent 不要安装或配置 PaddlePaddle GPU，不要运行 OCR 冒烟测试，也不要引导用户选择 `ocr` 路线；自动模式必须使用 ASR 作为无官方字幕时的回退路线。
 
 首次完整安装建议目标磁盘至少预留 **15 GB**，推荐预留 **20 GB 以上**；处理视频还需要额外临时空间。当前版本的典型占用如下：
 
 | 内容 | 典型磁盘占用 | 说明 |
 | --- | ---: | --- |
 | Git 仓库源码 | 约 45 MB | 不含虚拟环境、模型、视频和日志。 |
-| Python CUDA 环境及依赖 | 约 8～10 GB | 当前实测 `.venv` 约 8.75 GB；PyTorch、Paddle GPU wheel 与版本会影响大小。 |
+| Python CUDA 环境及依赖 | 约 8～10 GB | 当前实测 `.venv` 约 8.75 GB；PyTorch wheel 与依赖版本会影响大小。 |
 | 前端依赖与构建产物 | 约 50～150 MB | 当前 `node_modules` 约 46 MB，整个 `web` 目录约 120 MB。 |
-| PP-OCRv5 OCR 模型 | 约 21 MB | [`PP-OCRv5_mobile_det`](https://paddlepaddle.github.io/PaddleOCR/main/en/version3.x/pipeline_usage/OCR.html) 约 4.7 MB，`PP-OCRv5_mobile_rec` 约 16 MB；缓存元数据会略增。 |
 | Fun-ASR-Nano-2512 | 约 2.15 GB | [官方模型页](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512)标注约 2.15 GB；另有约数 MB 的 VAD 模型，建议为 ASR 缓存预留至少 2.3 GB。 |
 | 项目完整基础安装 | 约 11～13 GB | 不含后续下载的视频、音频、转写稿、日志和重复缓存。 |
 
-GPU 建议使用 NVIDIA RTX 系列、可用显存至少 8 GB。Agent 必须分别验证 `torch.cuda.is_available()` 与 `paddle.device.is_compiled_with_cuda()`；两个结果都为 `True` 才算 CUDA 路线配置完成。模型大小会随上游版本更新而变化，以上是当前版本的部署预算，不是永久不变的精确值。
+GPU 建议使用 NVIDIA RTX 系列、可用显存至少 8 GB。Agent 必须验证 `torch.cuda.is_available()` 为 `True`，才算 NVIDIA CUDA 路线配置完成。无需检查 PaddlePaddle。模型大小会随上游版本更新而变化，以上是当前版本的部署预算，不是永久不变的精确值。
 
 ## 用户如何把任务交给 AI
 
@@ -26,7 +27,7 @@ GPU 建议使用 NVIDIA RTX 系列、可用显存至少 8 GB。Agent 必须分�
 请把这个项目部署到我的 Windows 电脑：
 https://github.com/486287441/bilibili_transcriber
 
-先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。请自行检查环境、安装依赖、配置并授权飞书 CLI、构建前端、启动并验证服务。服务打开后，引导我访问 DeepSeek Key 页面，并让我亲自在本机 Web 设置的“API 配置”中填写 Key 和选择模型；不要索要、读取或代填我的 Key。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
+先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。请自行检查环境、安装依赖、配置并授权飞书 CLI、构建前端、启动并验证服务。不要配置或启用 OCR，自动模式在没有官方字幕时使用 ASR。服务打开后，引导我访问 DeepSeek Key 页面，并让我亲自在本机 Web 设置的“API 配置”中填写 Key 和选择模型；不要索要、读取或代填我的 Key。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
 ```
 
 如果不希望 AI 提交真实视频，再加一句：
@@ -47,7 +48,7 @@ https://github.com/486287441/bilibili_transcriber
 
 1. 项目位于确定、可长期保留的目录，而非临时目录。
 2. `.venv\Scripts\python.exe` 可用，Python 核心依赖能导入。
-3. 检测到 NVIDIA 显卡时，PyTorch 与 PaddlePaddle 必须都通过 CUDA 验证；只有确认没有 NVIDIA 显卡时才允许使用 CPU。
+3. 检测到 NVIDIA 显卡时，PyTorch 必须通过 CUDA 验证；只有确认没有 NVIDIA 显卡时才允许使用 CPU。不要配置或验证 OCR/PaddlePaddle。
 4. FFmpeg 与 FFprobe 均能被程序找到。
 5. `web\dist\index.html` 已构建。
 6. 官方 `lark-cli` 已安装，并完成 user 身份授权。
@@ -78,17 +79,16 @@ https://github.com/486287441/bilibili_transcriber
 
 ## 项目简介
 
-这是一个驻留在 Windows 本机的视频转文稿服务。服务监听系统剪贴板中的视频链接，任务会进入持久化队列，并按以下路线获取文本：
+这是一个驻留在 Windows 本机的视频转文稿服务。服务监听系统剪贴板中的视频链接，任务会进入持久化队列，并按以下公开支持路线获取文本：
 
 1. B 站官方 CC 字幕；
-2. PaddleOCR PP-OCRv5 识别画面硬字幕；
-3. yt-dlp + FFmpeg 下载音频，再用 Fun-ASR-Nano-2512 本地识别。
+2. 没有可用官方字幕时，通过 yt-dlp + FFmpeg 下载音频，再用 Fun-ASR-Nano-2512 本地识别。
 
 之后程序调用 DeepSeek 做纠错、整理和总结，并通过 `lark-cli` 将 Markdown 写入指定飞书知识库。队列、历史、文稿和日志均保存在本机。
 
 支持 B 站（含 `b23.tv`）、YouTube（普通视频、Shorts、`youtu.be`）和抖音常见视频/笔记链接。
 
-主要能力包括队列排序、取消和重试，WebSocket 进度，剪贴板监听，字幕/OCR/ASR 路线选择，模型懒加载和空闲卸载，历史记录、重新处理、文稿追问，以及 DeepSeek 失败时的豆包回退。
+主要能力包括队列排序、取消和重试，WebSocket 进度，剪贴板监听，官方字幕/ASR 路线选择，模型懒加载和空闲卸载，历史记录、重新处理、文稿追问，以及 DeepSeek 失败时的豆包回退。
 
 ## 当前版本的真实约束
 
@@ -100,7 +100,7 @@ https://github.com/486287441/bilibili_transcriber
 | Node.js | 构建前端需要 Node；YouTube 的 yt-dlp JS challenge 需要 Node 22+。 |
 | FFmpeg | `ffmpeg` 与 `ffprobe` 必须同时在 PATH，或同时放到项目根目录。 |
 | 云服务 | `config.validate()` 要求 DeepSeek 三项与飞书两项齐全后才允许启动。 |
-| 模型 | ASR 使用 `FunAudioLLM/Fun-ASR-Nano-2512` 和 VAD；OCR 使用 PP-OCRv5，首次使用通常需联网下载。 |
+| 模型 | ASR 使用 `FunAudioLLM/Fun-ASR-Nano-2512` 和 VAD，首次使用通常需联网下载。仓库中的 OCR 为作者实验功能，不在公开部署范围内。 |
 | 模型缓存 | ModelScope 缓存目前硬编码为 `D:/AI_Models_Cache`。 |
 | 前端 | FastAPI 只托管构建后的 `web/dist`。 |
 | 自启 | 每次启动都会校准 Windows 启动文件夹中的 `哔哩哔哩 Transcriber.lnk`。 |
@@ -123,7 +123,6 @@ MODEL_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "bilibili_tran
 FastAPI + WebSocket（server/，127.0.0.1:8765）
         ├── SQLite 队列与历史（data/queue.db）
         ├── B站 CC 字幕
-        ├── PaddleOCR 硬字幕
         └── yt-dlp + FFmpeg + FunASR
                          ↓
                 DeepSeek 两阶段整理
@@ -179,7 +178,7 @@ Get-Command git,python,py,node,npm,ffmpeg,ffprobe,lark-cli,nvidia-smi -ErrorActi
 2. 否则寻找官方 CPython 3.12；
 3. 用 `python -c "import sys; print(sys.executable); print(sys.version)"` 核实路径；
 4. 若路径位于 `msys64`，不要使用；
-5. 若只有 3.13/3.14，安装 3.12，避免 Paddle/FunASR wheel 兼容问题。
+5. 若只有 3.13/3.14，安装 3.12，避免 FunASR 等依赖的 wheel 兼容问题。
 
 缺少系统工具时，在用户同意后可用 `winget`。先用 `winget search` 核对 ID：
 
@@ -232,36 +231,15 @@ PyTorch wheel 自带 CUDA runtime，通常无需另装 CUDA Toolkit。驱动不�
 & .\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print('cuda=',torch.cuda.is_available()); print('runtime=',torch.version.cuda); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 ```
 
-### 4. 优先安装 GPU 版 Paddle，再安装项目依赖
-
-RTX / NVIDIA 环境必须先从 Paddle 官方 CUDA 12.6 索引安装 GPU 引擎：
-
-```powershell
-& .\.venv\Scripts\python.exe -m pip uninstall -y paddlepaddle
-& .\.venv\Scripts\python.exe -m pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
-```
-
-只有确认没有 NVIDIA GPU 时，才安装 CPU 引擎：
-
-```powershell
-& .\.venv\Scripts\python.exe -m pip install paddlepaddle==3.3.0
-```
+### 4. 安装项目依赖
 
 ```powershell
 & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-& .\.venv\Scripts\python.exe -c "import torch,funasr,modelscope,paddle,paddleocr,yt_dlp,fastapi,uvicorn,openai,PIL; print('Python dependencies OK'); print('paddle_cuda=', paddle.device.is_compiled_with_cuda())"
+& .\.venv\Scripts\python.exe -c "import torch,funasr,modelscope,yt_dlp,fastapi,uvicorn,openai,PIL; print('Python dependencies OK'); print('torch_cuda=', torch.cuda.is_available())"
 & .\.venv\Scripts\python.exe -m pip check
 ```
 
-NVIDIA 电脑还必须执行真实 OCR GPU 冒烟测试：
-
-```powershell
-& .\.venv\Scripts\python.exe .\scripts\test_ocr_gpu_runtime.py
-```
-
-输出必须同时满足 `"torch_cuda": true` 和 `"ocr_device": "gpu..."`。这一步会实际初始化 PP-OCRv5，比只检查 wheel 是否支持 CUDA 更可靠。
-
-依赖体积较大，下载可能耗时。PaddlePaddle 与 PyTorch 分别携带推理运行时，必须分别验证 GPU。NVIDIA 路线若任何一个 CUDA 检查或 OCR 冒烟测试失败，部署尚未完成，Agent 必须先排查 wheel、驱动和 CUDA 兼容性，不能静默退回 CPU。
+依赖体积较大，下载可能耗时。公开部署只需验证 PyTorch/Fun-ASR 路线；不要额外安装 `paddlepaddle-gpu`，不要初始化 PP-OCRv5，也不要运行 `scripts/test_ocr_gpu_runtime.py`。
 
 ### 5. 验证 FFmpeg
 
@@ -271,7 +249,7 @@ ffprobe -version
 & .\.venv\Scripts\python.exe -c "import shutil; print('ffmpeg=',shutil.which('ffmpeg')); print('ffprobe=',shutil.which('ffprobe'))"
 ```
 
-也可把便携版 `ffmpeg.exe`、`ffprobe.exe` 一起放在仓库根目录。只装 FFmpeg 不装 FFprobe 会导致 OCR 视频分析失败。安装后重启服务，模块才会重新解析工具路径。
+也可把便携版 `ffmpeg.exe`、`ffprobe.exe` 一起放在仓库根目录。两者都安装后重启服务，模块才会重新解析工具路径。
 
 ### 6. 构建前端
 
@@ -489,23 +467,7 @@ Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing | Select-Object Sta
 | `YTDLP_FRAGMENT_RETRIES` | `10` | 分片重试。 |
 | `YTDLP_NETWORK_RETRIES` | `3` | 应用层网络重试轮次。 |
 
-站点专用配置优先于通用配置，文件优先于浏览器读取。
-
-### PaddleOCR
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `PADDLEOCR_DEVICE` | `auto` | `auto`、`cpu`、`gpu:0`。 |
-| `PADDLEOCR_DETECTION_MODEL` | `PP-OCRv5_mobile_det` | 检测模型。 |
-| `PADDLEOCR_RECOGNITION_MODEL` | `PP-OCRv5_mobile_rec` | 识别模型。 |
-| `PADDLEOCR_CROP_RATIO` | `0.45` | 分析画面底部比例，代码限制 0.25–0.65。 |
-| `PADDLEOCR_FRAME_INTERVAL_SEC` | `2.0` | 常规抽帧间隔（0.5 fps）；短视频自动提高到 1 fps，超长视频降低到约 0.33 fps。 |
-| `PADDLEOCR_BATCH_SIZE` | `8` | 单次提交给 PP-OCRv5 的帧数。 |
-| `PADDLEOCR_DUPLICATE_HASH_DISTANCE` | `2` | 相邻帧感知哈希距离不超过此值时复用上帧结果。 |
-| `PADDLEOCR_FRAME_WIDTH` | `960` | FFmpeg 裁剪字幕区域后的缩放宽度。 |
-| `PADDLEOCR_VIDEO_MAX_HEIGHT` | `480` | OCR 检测视频的优先最高分辨率。 |
-| `PADDLEOCR_MIN_SCORE` | `0.62` | 置信度阈值。 |
-| `PADDLEOCR_DETECTION_SAMPLES` | `12` | 自动硬字幕探测采样数，代码至少取 6。 |
+站点专用配置优先于通用配置，文件优先于浏览器读取。OCR 相关环境变量属于作者本地实验配置，公开部署不需要设置。
 
 Web 设置保存在 `data/settings.json`，包括剪贴板监听、自动打开飞书、模型加载策略、空闲卸载、DeepSeek 模型及可编辑提示词/模板。飞书正文模板必须保留 `{{body}}`。
 
@@ -523,10 +485,11 @@ cmd /c "start.bat --restart"
 
 | 路线 | 行为 |
 | --- | --- |
-| `auto` | B 站依次尝试官方字幕、硬字幕、ASR；其他站点主要回退 ASR。 |
+| `auto` | B 站优先尝试官方字幕，没有可用字幕时回退 ASR；其他站点使用 ASR。 |
 | `subtitle` | 优先平台字幕。 |
-| `ocr` | 下载视频并识别画面硬字幕。 |
 | `asr` | 下载音频并本地语音识别。 |
+
+Agent 部署时必须将自动回退路线保持为 `asr`。界面中若仍可见 `ocr` 选项，它仅供作者实验，不得为其他用户启用或推荐。
 
 `stop.bat` 不会删除队列、历史、文稿或日志。
 
@@ -602,10 +565,6 @@ nvidia-smi
 ```
 
 确认使用项目解释器。DLL 错误常见于架构不一致、损坏 venv、缺 Visual C++ Runtime 或 CUDA wheel 不兼容。存在 NVIDIA 显卡时，应按官方兼容矩阵修复 CUDA wheel 或驱动，不得以安装 CPU wheel 作为永久规避方案；只有确认没有 NVIDIA 显卡时才走 CPU 路线。
-
-### PaddleOCR 初始化失败
-
-存在 NVIDIA 显卡时，必须安装匹配环境的 `paddlepaddle-gpu` 并让 OCR 使用 GPU。若 CUDA 初始化失败，应按 Paddle 官方 CUDA/cuDNN 兼容组合修复驱动和 wheel，不能照搬 PyTorch 的版本选择，也不能降级 CPU。只有确认没有 NVIDIA 显卡时，才安装 `paddlepaddle` CPU 版并显式使用 CPU。
 
 ### 模型加载卡住
 
@@ -703,7 +662,7 @@ cmd /c "start.bat --restart"
 仓库版本：<commit hash 或 ZIP>
 系统：<Windows 版本/架构>
 Python：<版本和虚拟环境路径>
-计算路线：NVIDIA CUDA / 无 NVIDIA 时 CPU（显卡名、torch CUDA 与 Paddle CUDA 是否可用）
+计算路线：NVIDIA CUDA / 无 NVIDIA 时 CPU（显卡名、torch CUDA 是否可用）
 Node.js：<版本>
 FFmpeg / FFprobe：<版本或路径>
 lark-cli：<版本、user 授权是否通过>
@@ -732,7 +691,6 @@ lark-cli：<版本、user 授权是否通过>
 - [DeepSeek 开放平台](https://platform.deepseek.com/)
 - [Lark/Feishu CLI](https://github.com/larksuite/cli)
 - [PyTorch 安装](https://pytorch.org/get-started/locally/)
-- [PaddlePaddle 安装](https://www.paddlepaddle.org.cn/install/quick)
 - [FFmpeg](https://ffmpeg.org/download.html)
 - [Node.js](https://nodejs.org/)
 
