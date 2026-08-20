@@ -388,6 +388,39 @@ def cancel_pending_task(task_id: str) -> TaskRow | None:
         return _row_from_sql(row) if row else None
 
 
+def remove_active_task(task_id: str) -> TaskRow | None:
+    """Atomically remove a cancellable active task from the persistent queue.
+
+    The worker may still be inside a blocking third-party call.  Removing the
+    SQLite row here makes the user's delete durable immediately; the separate
+    in-memory cancellation flag remains alive until the worker reaches its
+    next safe checkpoint and cleans temporary files.
+    """
+
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE id = ? AND status IN ('downloading', 'transcribing', 'polishing')
+            """,
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        cursor = conn.execute(
+            """
+            DELETE FROM tasks
+            WHERE id = ? AND status IN ('downloading', 'transcribing', 'polishing')
+            """,
+            (task_id,),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return None
+        conn.commit()
+        return _row_from_sql(row)
+
+
 def purge_completed_tasks() -> int:
     """Remove completed tasks from queue (they live in history)."""
     with _connect() as conn:

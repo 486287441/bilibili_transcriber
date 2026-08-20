@@ -70,6 +70,46 @@ async def list_logs() -> dict:
     return {"files": items}
 
 
+@router.get("/activity")
+async def read_activity_log(
+    limit: int = Query(200, ge=1, le=500),
+) -> dict:
+    from server import model_manager
+    from server.user_activity_log import recent
+
+    items = recent(limit=limit)
+    if model_manager.is_loading():
+        from server.queue_service import queue_service
+
+        elapsed = int(model_manager.load_elapsed_seconds())
+        active = next(
+            (item for item in queue_service.list() if item.status == "transcribing"),
+            None,
+        )
+        # A deleted task can leave the third-party model loader unwinding in
+        # the background.  Do not show that internal work as an active user
+        # task after its durable queue row has already been removed.
+        if active is not None:
+            items.insert(
+                0,
+                {
+                    "id": "live-model-loading",
+                    "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "level": "warning" if elapsed >= 120 else "info",
+                    "message": f"语音识别模型正在加载，已等待 {elapsed} 秒",
+                    "detail": (
+                        "模型加载时间明显偏长，任务正在等待模型，音频下载已经完成。"
+                        if elapsed >= 120
+                        else "首次加载模型时需要读取本地模型文件并初始化显卡。"
+                    ),
+                    "task_id": active.id,
+                    "title": active.title,
+                    "live": True,
+                },
+            )
+    return {"items": items[:limit], "updated_at": datetime.now().astimezone().isoformat()}
+
+
 @router.get("/{name}")
 async def read_log(
     name: str,

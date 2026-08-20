@@ -14,6 +14,7 @@ from datetime import datetime
 from feishu_client import create_video_document
 from server import history_db
 from server.article_store import load_polished
+from server.user_activity_log import explain_error, record as record_user_activity
 
 logger = logging.getLogger("server.feishu_publish")
 
@@ -25,6 +26,13 @@ class FeishuPublishQueue:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+
+    @staticmethod
+    def _record(message: str, **kwargs) -> None:
+        try:
+            record_user_activity(message, **kwargs)
+        except Exception:
+            logger.exception("写入用户运行日志失败 task_id=%s", kwargs.get("task_id"))
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -96,6 +104,12 @@ class FeishuPublishQueue:
             return
 
         history_service.update_publish_state(task_id, "publishing")
+        self._record(
+            "正在后台发布到飞书",
+            task_id=task_id,
+            title=row.title,
+            detail="本地文章已经完成，飞书发布不会阻塞下一条视频。",
+        )
         try:
             transcribed_at = datetime.fromisoformat(row.processed_at)
         except (TypeError, ValueError):
@@ -131,6 +145,12 @@ class FeishuPublishQueue:
                 output_doc_url=doc_url,
             )
             logger.info("飞书后台发布完成 task_id=%s doc=%s", task_id, doc_url)
+            self._record(
+                "飞书发布完成",
+                level="success",
+                task_id=task_id,
+                title=row.title,
+            )
             if should_auto_open_feishu():
                 open_feishu_in_browser(doc_url)
             return
@@ -139,6 +159,13 @@ class FeishuPublishQueue:
             task_id,
             "failed",
             error=str(last_error or "飞书发布失败"),
+        )
+        self._record(
+            "飞书发布失败",
+            level="error",
+            task_id=task_id,
+            title=row.title,
+            detail=explain_error(last_error, fallback="飞书发布失败，请稍后在历史记录中重试。"),
         )
 
 

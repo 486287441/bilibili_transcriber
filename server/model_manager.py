@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 import time
+from typing import Callable
 
 logger = logging.getLogger("server.model")
 
@@ -13,10 +14,17 @@ LOAD_TIMEOUT_SEC = 300.0
 
 _model = None
 _model_lock = threading.Lock()
+_load_done = threading.Event()
+_load_error: BaseException | None = None
+_loader_thread: threading.Thread | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 _loading = False
 _load_started_at: float | None = None
 _device_cache: str | None = None
+
+
+class ModelLoadCancelled(RuntimeError):
+    """The caller stopped waiting; the shared background load may continue."""
 
 
 def warm_device_cache(device: str) -> None:
@@ -82,53 +90,99 @@ def _emit(event_type: str, payload: dict | None = None) -> None:
     )
 
 
-def get_model(*, emit_event: bool = True):
-    """Load model on first use (lazy). Thread-safe singleton."""
-    global _model, _loading, _load_started_at
-    if _model is not None:
-        return _model
+def _load_model_background(*, emit_event: bool) -> None:
+    global _model, _loading, _load_started_at, _load_error
+    start = time.monotonic()
+    try:
+        from bilibili_transcriber import DEVICE, load_asr_model
 
+        warm_device_cache(DEVICE)
+        loaded = load_asr_model()
+        elapsed = time.monotonic() - start
+        with _model_lock:
+            _model = loaded
+        from server import progress_db
+        from server.model_lifecycle import record_loaded
+
+        progress_db.record_model_load(load_sec=elapsed, device=DEVICE)
+        record_loaded()
+        logger.info("Fun-ASR-Nano-2512 模型加载完成 (%.1fs)", elapsed)
+        if emit_event:
+            _emit("model.loaded", {"load_sec": round(elapsed, 1)})
+    except BaseException as exc:
+        with _model_lock:
+            _load_error = exc
+        logger.exception("Fun-ASR-Nano-2512 模型加载失败")
+    finally:
+        with _model_lock:
+            _loading = False
+            _load_started_at = None
+        _load_done.set()
+
+
+def _ensure_model_load(*, emit_event: bool) -> threading.Event:
+    global _loading, _load_started_at, _load_error, _load_done, _loader_thread
     with _model_lock:
         if _model is not None:
-            return _model
+            return _load_done
+        if _loading:
+            return _load_done
         _loading = True
         _load_started_at = time.monotonic()
+        _load_error = None
+        _load_done = threading.Event()
         logger.info("正在加载 Fun-ASR-Nano-2512 模型…")
 
         from server import progress_db
-
-        try:
-            from bilibili_transcriber import DEVICE, load_asr_model
-        except ImportError:
-            DEVICE = "cpu"
-            from bilibili_transcriber import load_asr_model
+        from bilibili_transcriber import DEVICE
 
         warm_device_cache(DEVICE)
-
         eta = progress_db.estimate_model_load_seconds(device=DEVICE)
         if emit_event:
             _emit(
                 "model.loading",
                 {"message": "正在加载模型", "eta_seconds": int(eta)},
             )
-        start = time.monotonic()
-        try:
-            loaded = load_asr_model()
-            elapsed = time.monotonic() - start
-            if elapsed > LOAD_TIMEOUT_SEC:
-                raise TimeoutError("模型加载超时")
-            _model = loaded
-            progress_db.record_model_load(load_sec=elapsed, device=DEVICE)
-            from server.model_lifecycle import record_loaded
+        _loader_thread = threading.Thread(
+            target=_load_model_background,
+            kwargs={"emit_event": emit_event},
+            name="asr-model-loader",
+            daemon=True,
+        )
+        _loader_thread.start()
+        return _load_done
 
-            record_loaded()
-            logger.info("Fun-ASR-Nano-2512 模型加载完成 (%.1fs)", elapsed)
-            if emit_event:
-                _emit("model.loaded", {"load_sec": round(elapsed, 1)})
+
+def get_model(
+    *,
+    emit_event: bool = True,
+    cancelled: Callable[[], bool] | None = None,
+):
+    """Return the shared model while allowing this caller to stop waiting.
+
+    The heavyweight third-party constructor runs in a daemon loader thread.
+    Cancelling one queue task therefore releases the sole queue worker without
+    throwing away a load that the following task can reuse.
+    """
+
+    if _model is not None:
+        return _model
+    done = _ensure_model_load(emit_event=emit_event)
+    deadline = time.monotonic() + LOAD_TIMEOUT_SEC
+    while not done.wait(0.2):
+        if cancelled is not None and cancelled():
+            raise ModelLoadCancelled("模型加载等待已取消")
+        if time.monotonic() >= deadline:
+            raise TimeoutError("模型加载超时")
+    if cancelled is not None and cancelled():
+        raise ModelLoadCancelled("模型加载等待已取消")
+    with _model_lock:
+        if _model is not None:
             return _model
-        finally:
-            _loading = False
-            _load_started_at = None
+        error = _load_error
+    if error is not None:
+        raise RuntimeError(f"模型加载失败: {error}") from error
+    raise RuntimeError("模型加载未返回有效实例")
 
 
 def preload_model_async() -> None:

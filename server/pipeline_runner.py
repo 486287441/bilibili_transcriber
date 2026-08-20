@@ -10,8 +10,18 @@ from typing import Any
 from server.progress_tracker import progress_tracker
 
 
+class PolishCancelled(RuntimeError):
+    """The queue task stopped waiting for an in-flight DeepSeek request."""
+
+
 def _ytdlp_progress_hook(task_id: str, *, has_bytes: threading.Event | None = None):
     def hook(data: dict) -> None:
+        # Raising from a yt-dlp progress hook aborts the active transfer. The
+        # worker then observes the cancellation flag and performs normal cleanup.
+        from server.queue_service import queue_service
+
+        if queue_service.is_cancel_requested(task_id):
+            raise RuntimeError("task cancellation requested")
         status = data.get("status")
         if status not in ("downloading", "extracting"):
             return
@@ -171,6 +181,7 @@ def polish_with_progress(
     task_id: str,
     open_browser: bool,
     input_is_trusted: bool = False,
+    cancelled=None,
 ) -> tuple[bool, str | None]:
     from pipeline import generate_local_article_result
     progress_tracker.set_phase(task_id, "polish")
@@ -202,12 +213,43 @@ def polish_with_progress(
 
     thread = threading.Thread(target=ticker, name=f"polish-progress-{task_id[:8]}", daemon=True)
     thread.start()
+    cancel_token = threading.Event()
+    finished = threading.Event()
+    result: list[bool] = []
+    failure: list[BaseException] = []
+
+    def generate() -> None:
+        try:
+            result.append(
+                generate_local_article_result(
+                    text,
+                    task_id=task_id,
+                    input_is_trusted=input_is_trusted,
+                    cancelled=cancel_token.is_set,
+                )
+            )
+        except BaseException as exc:
+            failure.append(exc)
+        finally:
+            finished.set()
+
+    generator = threading.Thread(
+        target=generate,
+        name=f"polish-request-{task_id[:8]}",
+        daemon=True,
+    )
+    generator.start()
     try:
-        ok = generate_local_article_result(
-            text,
-            task_id=task_id,
-            input_is_trusted=input_is_trusted,
-        )
+        while not finished.wait(0.2):
+            if cancelled is not None and cancelled():
+                cancel_token.set()
+                raise PolishCancelled("润色等待已取消")
+        if cancelled is not None and cancelled():
+            cancel_token.set()
+            raise PolishCancelled("润色等待已取消")
+        if failure:
+            raise failure[0]
+        ok = bool(result and result[0])
     finally:
         done.set()
         thread.join(timeout=1.0)

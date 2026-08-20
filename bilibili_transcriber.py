@@ -494,9 +494,25 @@ def load_asr_model():
     """初始化 Fun-ASR-Nano 与 VAD 组合模型。"""
     print(f"⏳ 正在预加载 {ASR_MODEL_NAME} (路径: {MODEL_CACHE_DIR})...")
     try:
+        local_models = os.path.join(MODEL_CACHE_DIR, "models")
+        local_asr = os.path.join(local_models, "FunAudioLLM", ASR_MODEL_NAME)
+        local_vad = os.path.join(
+            local_models,
+            "iic",
+            "speech_fsmn_vad_zh-cn-16k-common-pytorch",
+        )
+        # Passing repository IDs makes ModelScope perform a remote hub check
+        # even when every model file is already present.  Prefer explicit
+        # local directories so normal offline startup never waits on the hub.
+        asr_source = local_asr if os.path.isfile(os.path.join(local_asr, "model.pt")) else ASR_MODEL_ID
+        vad_source = (
+            local_vad
+            if os.path.isfile(os.path.join(local_vad, "model.pt"))
+            else "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
+        )
         model = AutoModel(
-            model=ASR_MODEL_ID,
-            vad_model="iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
+            model=asr_source,
+            vad_model=vad_source,
             vad_kwargs={"max_single_segment_time": 30000},
             device=DEVICE,
             disable_update=True,

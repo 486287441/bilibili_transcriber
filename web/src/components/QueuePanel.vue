@@ -16,10 +16,6 @@
             <TaskLabel :url="item.url" :title="item.title" link />
             <div class="task-badges">
               <span class="badge" :data-status="item.status">{{ STATUS_LABELS[item.status] || item.status }}</span>
-              <span
-                class="route-badge"
-                :data-route="item.resolved_route || item.requested_route || 'asr'"
-              >{{ transcriptionRouteLabel(item) }}</span>
             </div>
             <span
               v-if="item.status === 'failed' && failReason(item)"
@@ -43,7 +39,6 @@ import { ref } from 'vue'
 import {
   STATUS_LABELS,
   taskFailReason,
-  transcriptionRouteLabel,
 } from '../composables.js'
 import TaskLabel from './TaskLabel.vue'
 

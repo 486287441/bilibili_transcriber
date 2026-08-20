@@ -67,6 +67,7 @@ def _completion(system_prompt: str, user_message: str, *, temperature: float = _
         response = _client().chat.completions.create(
             model=get_deepseek_model(),
             temperature=temperature,
+            extra_body={"thinking": {"type": "disabled"}},
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -170,7 +171,7 @@ def stream_chat_about_article(article_text: str, messages: list[dict[str, str]])
             temperature=_TEMPERATURE,
             messages=turns,
             stream=True,
-            extra_body={"thinking": {"type": "enabled"}},
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except DeepSeekError:
         raise

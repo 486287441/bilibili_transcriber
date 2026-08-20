@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from ctypes import windll
 
 import pyperclip
 
@@ -16,10 +17,49 @@ from video_urls import extract_video_url
 logger = logging.getLogger("server.listeners")
 
 
+def _clipboard_sequence_number() -> int | None:
+    """Return the Windows clipboard change counter when available."""
+    try:
+        return int(windll.user32.GetClipboardSequenceNumber())
+    except (AttributeError, OSError):
+        return None
+
+
 class ListenerManager:
     def __init__(self) -> None:
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._clipboard_lock = threading.Lock()
+        self._ignored_clipboard_sequence: int | None = None
+
+    def ignore_current_clipboard_once(self, url: str) -> bool:
+        """Consume only the clipboard event that produced the deleted task.
+
+        Copying the same URL again increments the Windows clipboard sequence,
+        so the next explicit copy remains eligible for submission.
+        """
+        sequence = _clipboard_sequence_number()
+        if sequence is None:
+            return False
+        try:
+            current_url = extract_video_url(pyperclip.paste().strip())
+        except Exception:
+            return False
+        if not current_url or current_url != extract_video_url(url):
+            return False
+        with self._clipboard_lock:
+            self._ignored_clipboard_sequence = sequence
+        logger.info("删除任务时已忽略当前剪贴板事件 sequence=%d", sequence)
+        return True
+
+    def _is_ignored_clipboard_sequence(self, sequence: int | None) -> bool:
+        if sequence is None:
+            return False
+        with self._clipboard_lock:
+            if self._ignored_clipboard_sequence != sequence:
+                return False
+            self._ignored_clipboard_sequence = None
+            return True
 
     def start(self) -> None:
         if self._threads:
@@ -55,6 +95,7 @@ class ListenerManager:
 
     def _clipboard_loop(self) -> None:
         last_clip = ""
+        last_sequence: int | None = None
         while not self._stop_event.is_set():
             try:
                 settings = load_settings()
@@ -67,8 +108,19 @@ class ListenerManager:
                 except Exception:
                     clip_text = ""
 
-                if clip_text != last_clip:
+                sequence = _clipboard_sequence_number()
+                changed = (
+                    sequence != last_sequence
+                    if sequence is not None
+                    else clip_text != last_clip
+                )
+                if changed:
+                    last_sequence = sequence
                     last_clip = clip_text
+                    if self._is_ignored_clipboard_sequence(sequence):
+                        logger.debug("当前剪贴板事件已由删除操作消费 sequence=%s", sequence)
+                        time.sleep(1.0)
+                        continue
                     video_url = extract_video_url(clip_text)
                     if video_url:
                         result = submit_url(

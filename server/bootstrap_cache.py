@@ -64,6 +64,22 @@ def refresh_async() -> None:
     threading.Thread(target=refresh, name="bootstrap-refresh", daemon=True).start()
 
 
+def remove_queue_task(task_id: str) -> None:
+    """Synchronously evict a deleted task from the cached first-page payload."""
+
+    global _snapshot
+    with _lock:
+        if not _ready or _snapshot is None:
+            return
+        queue = _snapshot.get("queue")
+        if not isinstance(queue, list):
+            return
+        updated = [item for item in queue if item.get("id") != task_id]
+        if len(updated) == len(queue):
+            return
+        _snapshot = {**_snapshot, "queue": updated}
+
+
 def is_ready() -> bool:
     return _ready
 

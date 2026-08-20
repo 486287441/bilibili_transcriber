@@ -6,7 +6,6 @@
       <TaskLabel class="progress-title" :url="active.url" :title="active.title" link />
       <div class="meta">
         <span v-if="active.duration_sec">时长 {{ formatDuration(active.duration_sec) }}</span>
-        <span class="route-badge" :data-route="routeKind">{{ routeLabel }}</span>
         <span class="phase-tag">{{ phaseLabel }}</span>
       </div>
       <div class="phase-bars">
@@ -26,7 +25,6 @@
         </div>
       </div>
       <div class="bar-footer">
-        <span>{{ phaseLabel }}</span>
         <span>{{ etaText }}</span>
       </div>
     </template>
@@ -39,7 +37,6 @@ import {
   PHASE_LABELS,
   formatEta,
   transcriptionPhaseLabel,
-  transcriptionRouteLabel,
   useSmoothEta,
   useSmoothPhaseProgress,
 } from '../composables.js'
@@ -70,10 +67,6 @@ const routeState = computed(() => {
     resolved_route: props.progress?.resolved_route ?? props.active?.resolved_route,
   }
 })
-const routeKind = computed(() => (
-  routeState.value.resolved_route || routeState.value.requested_route || 'asr'
-))
-const routeLabel = computed(() => transcriptionRouteLabel(routeState.value))
 const transcribeLabel = computed(() => transcriptionPhaseLabel(routeState.value))
 
 const phaseBars = computed(() => [

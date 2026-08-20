@@ -158,6 +158,9 @@ def _install_worker_import_stubs() -> None:
     history = SimpleNamespace(set_event_loop=no_op, archive_task=no_op)
     ws = SimpleNamespace(broadcast=no_op)
 
+    class PolishCancelled(RuntimeError):
+        pass
+
     _install_module("server.activity", touch=no_op)
     _install_module(
         "server.model_manager",
@@ -171,6 +174,7 @@ def _install_worker_import_stubs() -> None:
     _install_module("server.metadata", schedule_metadata_fetch=no_op)
     _install_module(
         "server.pipeline_runner",
+        PolishCancelled=PolishCancelled,
         download_video_with_progress=_unexpected,
         download_with_progress=_unexpected,
         polish_with_progress=_unexpected,
@@ -248,6 +252,7 @@ class RouteHarness:
             "audio_download": 0,
             "asr_model_load": 0,
             "asr_transcribe": 0,
+            "audio_cleanup": 0,
             "polish": 0,
         }
         self.final: FakeTask | None = None
@@ -364,9 +369,12 @@ class RouteHarness:
 
         model_sentinel = object()
 
-        def get_asr_model() -> object:
+        def get_asr_model(**_kwargs: Any) -> object:
             self._count("asr_model_load")
             return model_sentinel
+
+        class ModelLoadCancelled(RuntimeError):
+            pass
 
         def transcribe_with_progress(
             _audio_path: str,
@@ -404,6 +412,7 @@ class RouteHarness:
         worker_module.estimate_input_tokens = lambda value: value
         worker_module.model_manager = SimpleNamespace(
             get_model=get_asr_model,
+            ModelLoadCancelled=ModelLoadCancelled,
             unload_model=lambda **_kwargs: None,
             is_model_loaded=lambda: False,
         )
@@ -412,7 +421,9 @@ class RouteHarness:
 
         self.service = worker_module.WorkerService()
         self.service._append_queue_log = lambda *_args, **_kwargs: None
-        self.service._maybe_cleanup_audio = lambda *_args, **_kwargs: None
+        self.service._maybe_cleanup_audio = lambda audio, *_args, **_kwargs: (
+            self._count("audio_cleanup") if audio else None
+        )
 
         def finalize(
             _task: FakeTask,
@@ -513,6 +524,7 @@ def test_auto_without_any_subtitle_falls_back_to_asr() -> None:
         assert harness.calls["audio_download"] == 1
         assert harness.calls["asr_model_load"] == 1
         assert harness.calls["asr_transcribe"] == 1
+        assert harness.calls["audio_cleanup"] == 1
 
 
 def test_explicit_ocr_empty_result_fails_without_asr_fallback() -> None:
@@ -547,6 +559,7 @@ def test_non_bilibili_auto_goes_directly_to_asr() -> None:
         assert harness.calls["audio_download"] == 1
         assert harness.calls["asr_model_load"] == 1
         assert harness.calls["asr_transcribe"] == 1
+        assert harness.calls["audio_cleanup"] == 1
 
 
 def test_auto_configured_ocr_empty_fails_without_asr_fallback() -> None:

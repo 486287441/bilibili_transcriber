@@ -117,6 +117,12 @@ class DeepSeekKeyUpdate(BaseModel):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_logging()
+    try:
+        from server.user_activity_log import record
+
+        record("本地服务已启动", level="success", detail="队列、剪贴板监听和后台发布服务正在运行。")
+    except Exception:
+        logger.exception("写入用户运行日志失败")
     logger.info(
         "服务启动 version=%s host=%s port=%d",
         __version__,

@@ -107,6 +107,12 @@ async def get_queue_item(task_id: str) -> dict[str, Any]:
 async def delete_queue_item(task_id: str) -> dict[str, str]:
     try:
         task = queue_service.get(task_id)
+        # Do not let the clipboard snapshot that originally created this task
+        # immediately submit it again. A later Ctrl+C has a new sequence number
+        # and is intentionally allowed.
+        from server.listeners import listener_manager
+
+        listener_manager.ignore_current_clipboard_once(task.url)
         if task.status in {"pending", "downloading", "transcribing", "polishing"}:
             cancelled = queue_service.cancel(task_id)
             return {

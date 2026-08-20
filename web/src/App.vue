@@ -86,6 +86,7 @@ const historyPage = ref(1)
 const historyQuery = ref('')
 const settingsRef = ref(null)
 const publishRetrying = ref(new Set())
+const deletingQueueIds = ref(new Set())
 const notice = ref('')
 
 const ACTIVE = new Set(['downloading', 'transcribing', 'polishing'])
@@ -160,8 +161,18 @@ function pollStatus() {
 }
 
 async function refreshQueue() {
-  queueItems.value = await api.queue()
+  applyQueueItems(await api.queue())
   await syncProgress()
+}
+
+function applyQueueItems(items) {
+  const existingIds = new Set(items.map((item) => item.id))
+  const hidden = new Set(deletingQueueIds.value)
+  for (const id of hidden) {
+    if (!existingIds.has(id)) hidden.delete(id)
+  }
+  deletingQueueIds.value = hidden
+  queueItems.value = items.filter((item) => !hidden.has(item.id))
 }
 
 async function syncProgress() {
@@ -198,6 +209,7 @@ async function refreshHistory() {
 
 function handleWs(msg) {
   if (msg.type === 'task.progress') {
+    if (deletingQueueIds.value.has(msg.payload?.task_id)) return
     currentProgress.value = msg.payload
     return
   }
@@ -244,14 +256,22 @@ function handleWs(msg) {
 
 async function onDeleteQueue(id) {
   const backup = queueItems.value
+  deletingQueueIds.value = new Set(deletingQueueIds.value).add(id)
   queueItems.value = queueItems.value.filter((t) => t.id !== id)
   if (currentProgress.value?.task_id === id) {
     currentProgress.value = null
   }
   try {
-    await api.deleteQueue(id)
+    const result = await api.deleteQueue(id)
+    showNotice(result.status === 'cancel_requested' ? '正在取消并清理任务' : '任务已删除')
     await refreshQueue()
+    const hidden = new Set(deletingQueueIds.value)
+    hidden.delete(id)
+    deletingQueueIds.value = hidden
   } catch (e) {
+    const hidden = new Set(deletingQueueIds.value)
+    hidden.delete(id)
+    deletingQueueIds.value = hidden
     queueItems.value = backup
     await refreshQueue()
     alert(e.message || '删除失败')
@@ -310,7 +330,7 @@ function openSettings() {
 async function loadInitialData() {
   try {
     const data = await api.bootstrap()
-    queueItems.value = data.queue ?? []
+    applyQueueItems(data.queue ?? [])
     settings.value = data.settings
     secrets.value = data.secrets
     serviceStatus.value = data.status

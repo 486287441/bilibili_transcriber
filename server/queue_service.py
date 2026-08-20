@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from dataclasses import replace
 from typing import Any, Callable
 
 from server import queue_db
@@ -118,6 +119,31 @@ class QueueService:
         self._emit_state_changed(task_id, old_status, "cancelled")
         self._emit_queue_updated("cancel", task_id)
 
+    @staticmethod
+    def _record_deleted(task: TaskRow, *, active: bool = False) -> None:
+        try:
+            from server.user_activity_log import record
+
+            record(
+                "任务已从队列删除",
+                level="success",
+                task_id=task.id,
+                title=task.title,
+                detail=(
+                    "已通知后台停止处理，临时文件会在安全点自动清理。"
+                    if active
+                    else "该任务不会在刷新页面后重新出现。"
+                ),
+            )
+        except Exception:
+            logger.exception("写入任务删除日志失败 task_id=%s", task.id)
+
+    @staticmethod
+    def _evict_deleted_task(task_id: str) -> None:
+        from server.bootstrap_cache import remove_queue_task
+
+        remove_queue_task(task_id)
+
     def validate_transition(self, old: str, new: str) -> None:
         allowed = _TRANSITIONS.get(old, set())
         if new not in allowed:
@@ -188,6 +214,12 @@ class QueueService:
             url,
             requested_route,
         )
+        try:
+            from server.user_activity_log import record
+
+            record("任务已加入处理队列", task_id=task.id, title=task.title)
+        except Exception:
+            logger.exception("写入用户运行日志失败 task_id=%s", task.id)
         self._emit_queue_updated("enqueue", task.id)
         if self._on_enqueue_metadata:
             self._on_enqueue_metadata(task.id, url)
@@ -208,11 +240,15 @@ class QueueService:
             raise TaskInProgressError("进行中的任务需先取消")
         if task.status == "pending":
             queue_db.delete_task(task_id)
+            self._evict_deleted_task(task_id)
             self._emit_queue_updated("delete", task_id)
+            self._record_deleted(task)
             return
         if task.status in {"completed", "failed", "cancelled"}:
             queue_db.delete_task(task_id)
+            self._evict_deleted_task(task_id)
             self._emit_queue_updated("delete", task_id)
+            self._record_deleted(task)
             return
         raise TaskInProgressError("无法删除该状态的任务")
 
@@ -221,32 +257,44 @@ class QueueService:
         if task.status == "pending":
             updated = queue_db.cancel_pending_task(task_id)
             if updated is not None:
+                self._evict_deleted_task(task_id)
                 self._emit_state_changed(task_id, "pending", "cancelled")
                 self._emit_queue_updated("cancel", task_id)
+                self._record_deleted(updated)
                 return updated
             # The worker may have claimed it between ``get`` and the atomic
             # pending delete.  Re-read and use the active cancellation path.
             task = self.get(task_id)
-        if task.status in {"downloading", "transcribing"}:
+        if task.status in {"downloading", "transcribing", "polishing"}:
             self.request_cancel(task_id)
-            try:
-                current = self.get(task_id)
-            except TaskNotFoundError:
+            removed = queue_db.remove_active_task(task_id)
+            if removed is not None:
+                self._evict_deleted_task(task_id)
+                self._emit_state_changed(task_id, removed.status, "cancelled")
+                self._emit_queue_updated("cancel", task_id)
+                self._record_deleted(removed, active=True)
+                return replace(
+                    removed,
+                    status="cancelled",
+                    completed_at=queue_db._now_iso(),
+                )
+
+            # The worker may have reached another state (or observed the
+            # cancellation and removed the row) between the first read and
+            # the conditional delete above.
+            current = queue_db.get_task(task_id)
+            if current is None:
                 self.clear_cancel(task_id)
-                raise
-            if current.status == "polishing":
-                self.clear_cancel(task_id)
-                raise TaskInProgressError("任务已进入发布阶段，无法安全取消")
-            if current.status not in {"downloading", "transcribing"}:
+                self._record_deleted(task, active=True)
+                return replace(
+                    task,
+                    status="cancelled",
+                    completed_at=queue_db._now_iso(),
+                )
+            if current.status not in {"downloading", "transcribing", "polishing"}:
                 self.clear_cancel(task_id)
                 raise TaskInProgressError("任务状态已变化，无法取消")
-            # The worker owns cleanup and the final state transition.  Keeping
-            # the row/cancel flag alive lets long OCR loops observe the request
-            # instead of clearing it before they get a chance to stop.
-            self._emit_queue_updated("cancel_requested", task_id)
-            return current
-        if task.status == "polishing":
-            raise TaskInProgressError("任务已进入发布阶段，无法安全取消")
+            raise TaskInProgressError("任务删除发生并发冲突，请重试")
         raise TaskInProgressError("只能取消 pending 或进行中的任务")
 
     def retry(self, task_id: str, *, reset_retry_count: bool = True) -> TaskRow:

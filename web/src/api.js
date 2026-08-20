@@ -52,6 +52,7 @@ export const api = {
   clearPolishedStorage: () => request('/api/storage/polished/clear', { method: 'POST' }),
   logs: () => request('/api/logs'),
   logContent: (name, lines = 500) => request(`/api/logs/${encodeURIComponent(name)}?lines=${lines}`),
+  activityLogs: (limit = 200) => request(`/api/logs/activity?limit=${limit}`),
   queue: (status) => request(status ? `/api/queue?status=${status}` : '/api/queue'),
   addQueue: (url, requestedRoute = 'auto') => request('/api/queue', {
     method: 'POST',

@@ -33,7 +33,7 @@ sys.modules.setdefault(
         get_transcript_correction_prompt=lambda: "第一阶段测试 Prompt",
     ),
 )
-from deepseek_client import process_transcript
+from deepseek_client import process_transcript, stream_chat_about_article
 from prompts import TRANSCRIPT_CORRECTION_SYSTEM, render_polish_system
 from transcript_processing import remove_asr_punctuation
 
@@ -85,6 +85,36 @@ def test_two_separate_deepseek_calls() -> None:
     assert calls[0]["messages"][0]["content"] == TRANSCRIPT_CORRECTION_SYSTEM
     assert calls[0]["messages"][1]["content"] == "版本GPT-5数值3.5"
     assert "第一阶段：可信逐字稿。" in calls[1]["messages"][1]["content"]
+    assert all(
+        call["extra_body"] == {"thinking": {"type": "disabled"}}
+        for call in calls
+    )
+
+
+def test_followup_explicitly_disables_thinking() -> None:
+    calls: list[dict] = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        delta = SimpleNamespace(content="直接回答", reasoning_content=None)
+        return [SimpleNamespace(choices=[SimpleNamespace(delta=delta)])]
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    with (
+        patch("deepseek_client._client", return_value=fake_client),
+        patch("deepseek_client.get_deepseek_model", return_value="test-model"),
+    ):
+        events = list(
+            stream_chat_about_article(
+                "文章正文",
+                [{"role": "user", "content": "文章结论是什么？"}],
+            )
+        )
+
+    assert calls[0]["stream"] is True
+    assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert not any(event["type"] == "thinking" for event in events)
+    assert events[-1]["reply"] == "直接回答"
 
 
 def test_persisted_legacy_second_stage_prompt_is_upgraded() -> None:
@@ -100,5 +130,6 @@ if __name__ == "__main__":
     test_first_stage_prompt_contract()
     test_remove_only_natural_language_punctuation()
     test_two_separate_deepseek_calls()
+    test_followup_explicitly_disables_thinking()
     test_persisted_legacy_second_stage_prompt_is_upgraded()
     print("two-stage pipeline tests PASS")
