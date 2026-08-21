@@ -3,9 +3,6 @@
 funasr>=1.3.26
 modelscope
 sentencepiece==0.2.0
-# Paddle 推理引擎必须按硬件单独安装；优先 paddlepaddle-gpu，
-# 仅无 NVIDIA 显卡时安装 paddlepaddle。具体命令见 README。
-paddleocr>=3.0,<4
 yt-dlp[default]
 pyperclip
 tqdm

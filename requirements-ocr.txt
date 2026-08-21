@@ -1,0 +1,4 @@
+# 实验性画面 OCR 路线，不属于公开部署的默认依赖。
+# 先安装 requirements.txt，再根据硬件安装合适的 PaddlePaddle 推理引擎。
+-r requirements.txt
+paddleocr>=3.0,<4

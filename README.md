@@ -7,8 +7,15 @@
 请把这个项目部署到我的 Windows 电脑：
 https://github.com/486287441/bilibili_transcriber
 
-先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。请自行检查环境、安装依赖、配置并授权飞书 CLI、构建前端、启动并验证服务。不要配置或启用 OCR，自动模式在没有官方字幕时使用 ASR。服务打开后，引导我访问 DeepSeek Key 页面，并让我亲自在本机 Web 设置的“API 配置”中填写 Key 和选择模型；不要索要、读取或代填我的 Key。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
+先完整阅读根目录 README.md，并严格执行其中的“AI 部署协议”。优先运行根目录 install.ps1 完成环境检查、依赖安装、前端构建和飞书 CLI 安装；遇到错误时根据完整输出修复，不要改成手工重复安装。引导我本人确认飞书网页登录授权并选择目标知识库目录。不要配置或启用 OCR，自动模式在没有官方字幕时使用 ASR。服务打开后，引导我访问 DeepSeek Key 页面，并让我亲自在本机 Web 设置的“API 配置”中填写 Key 和选择模型；不要索要、读取或代填我的 Key。不要覆盖已有的 .env、cookies、data、downloads、logs 或未提交代码。完成后报告访问地址、验证结果、启动/停止方法和遗留问题。
 ```
+
+正常情况下，用户不需要手工执行命令。Agent 可以在一个部署任务中完成全部可自动化工作，但以下两项必须由用户本人操作：
+
+1. 在浏览器中确认飞书 OAuth 授权，并告诉 Agent 文档应保存到哪个知识库目录；
+2. 服务启动后，在本机 Web 设置页填写 DeepSeek API Key。
+
+Windows 的 UAC、Agent 沙箱或软件安装授权提示也可能要求用户点击允许；这些系统安全确认不能由项目绕过。
 
 
 ---
@@ -140,6 +147,39 @@ FastAPI + WebSocket（server/，127.0.0.1:8765）
 
 以下使用 PowerShell。AI 必须把示例路径替换为实际绝对路径。
 
+### 推荐：自动安装入口
+
+完成克隆并进入项目目录后，Agent 应优先运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+脚本可重复运行，并会完成以下工作：
+
+- 检查 Python 3.12、Node.js 22+、FFmpeg 和 FFprobe，缺失时通过 `winget` 安装；
+- 保留并验证已有 `.venv`，不存在时创建；
+- 根据 NVIDIA 显卡自动选择 CUDA 或 CPU PyTorch；
+- 安装默认 ASR 依赖，不安装实验性 OCR；
+- 执行 `npm ci` 和前端生产构建；
+- 安装并定位官方 `lark-cli`，需要时发起用户身份授权；
+- 仅在 `.env` 不存在时从示例创建，不读取或覆盖任何秘密。
+
+常用参数：
+
+```powershell
+# 只读检查，不安装或修改
+.\install.ps1 -CheckOnly
+
+# 明确采用 CPU；仅适用于确认没有 NVIDIA GPU 的电脑
+.\install.ps1 -TorchMode cpu
+
+# Agent 已计划单独处理飞书授权时
+.\install.ps1 -SkipLarkLogin
+```
+
+脚本完成基础部署后，Agent 仍需查询飞书知识库、让用户选择目标目录、写入两项 `FEISHU_WIKI_*` 配置，然后启动并执行后文验收。下面的分步流程保留为诊断和特殊环境的后备方案。
+
 ### 0. 确认目录和仓库状态
 
 ```powershell
@@ -264,12 +304,14 @@ Test-Path .\web\dist\index.html
 
 ### 7. 安装并授权飞书 CLI
 
-项目需要官方 [Lark/Feishu CLI](https://github.com/larksuite/cli)，命令名必须是 `lark-cli`：
+项目需要官方 [Lark/Feishu CLI](https://github.com/larksuite/cli)。推荐由 `install.ps1` 安装；手工安装命令为：
 
 ```powershell
 npm install -g @larksuite/cli
 lark-cli --version
 ```
+
+运行时依次检查 `.env` 的 `LARK_CLI_PATH`、项目内便携版、`PATH` 和 Windows 用户 npm 全局目录，因此不要求把 CLI 复制进仓库。
 
 按当前 CLI 帮助初始化并授权。常见流程：
 

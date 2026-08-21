@@ -13,7 +13,6 @@ Set-StrictMode -Version Latest
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $port = Get-ProjectServerPort -ProjectRoot $ProjectRoot
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$larkCli = Join-Path $ProjectRoot "tools\lark-cli\bin\lark-cli.exe"
 $logsDir = Get-ProjectLogsDir -ProjectRoot $ProjectRoot
 
 function Wait-ServerHealth {
@@ -50,8 +49,16 @@ if (-not $?) {
     exit 1
 }
 
-if (-not (Test-Path -LiteralPath $larkCli)) {
-    Write-Host "[error] lark-cli not found: $larkCli"
+try {
+    # Keep startup discovery identical to the application runtime: explicit
+    # LARK_CLI_PATH, bundled binary, PATH, then the per-user npm directory.
+    $larkCli = (& $python -c "from feishu_client import _lark_executable; print(_lark_executable())" 2>$null | Select-Object -Last 1).Trim()
+    if (-not $larkCli -or -not (Test-Path -LiteralPath $larkCli)) {
+        throw "resolved path is unavailable"
+    }
+}
+catch {
+    Write-Host "[error] lark-cli not found; install @larksuite/cli or set LARK_CLI_PATH"
     Write-StartupLog -ProjectRoot $ProjectRoot -Message "ERROR lark-cli missing"
     exit 1
 }
