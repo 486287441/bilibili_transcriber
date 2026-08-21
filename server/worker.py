@@ -329,7 +329,7 @@ class WorkerService:
                 logger.exception("完成进度收尾失败 task_id=%s", task.id)
             if archived:
                 try:
-                    queue_service.delete(task.id)
+                    queue_service.archive_completed(task.id)
                 except TaskNotFoundError:
                     pass
                 except Exception:
@@ -433,6 +433,7 @@ class WorkerService:
                 "正在加载 Fun-ASR 语音识别模型",
                 detail="首次加载或模型已被释放时，需要从本地磁盘读取模型并初始化显卡。",
             )
+            model_load_started = time.monotonic()
             try:
                 model = model_manager.get_model(
                     cancelled=lambda: (
@@ -442,6 +443,9 @@ class WorkerService:
                 )
             except model_manager.ModelLoadCancelled as exc:
                 raise _TaskCancelled(str(exc)) from exc
+            phase_times["model_load"] = phase_times.get("model_load", 0.0) + (
+                time.monotonic() - model_load_started
+            )
             if self._check_cancelled(task):
                 raise _TaskCancelled("任务已取消")
             self._user_log(task, "语音识别模型加载完成", level="success")
@@ -560,9 +564,13 @@ class WorkerService:
                         detail={"message": "正在检测 B 站字幕"},
                     )
                     self._user_log(task, "正在检查 B 站官方字幕")
+                    subtitle_started = time.monotonic()
                     try:
                         subtitle_result = fetch_bilibili_subtitles(task.url)
                     except BilibiliSubtitleAuthError as exc:
+                        phase_times["subtitle"] = phase_times.get("subtitle", 0.0) + (
+                            time.monotonic() - subtitle_started
+                        )
                         diagnostics.update(
                             {
                                 "platform_subtitle_auth_failed": True,
@@ -595,11 +603,17 @@ class WorkerService:
                         if requested_route == "subtitle":
                             raise TranscriptRouteUnavailable(str(exc)) from exc
                     except Exception as exc:
+                        phase_times["subtitle"] = phase_times.get("subtitle", 0.0) + (
+                            time.monotonic() - subtitle_started
+                        )
                         if requested_route == "subtitle":
                             raise RuntimeError(f"B站字幕检测失败: {exc}") from exc
                         diagnostics["platform_subtitle_probe_error"] = str(exc)[:500]
                         logger.warning("B站字幕检测失败，自动路线继续: %s", exc)
                     else:
+                        phase_times["subtitle"] = phase_times.get("subtitle", 0.0) + (
+                            time.monotonic() - subtitle_started
+                        )
                         task, meta = self._apply_metadata(
                             task,
                             {
@@ -818,7 +832,9 @@ class WorkerService:
                 progress_db.record_stats(
                     task_id=task.id,
                     duration_sec=task.duration_sec,
+                    subtitle_sec=phase_times.get("subtitle", 0.0),
                     download_sec=phase_times.get("download", 0.0),
+                    model_load_sec=phase_times.get("model_load", 0.0),
                     transcribe_sec=phase_times.get("transcribe", 0.0),
                     polish_sec=phase_times.get("polish", 0.0),
                     polish_chars=len(text),

@@ -36,17 +36,55 @@ function Test-OurServerHealth {
     }
 }
 
+function Get-ServerHealthInfo {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Port
+    )
+
+    try {
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/health" -UseBasicParsing -TimeoutSec 3
+        if ($response.StatusCode -ne 200) {
+            return $null
+        }
+        return ($response.Content | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
 function Get-PortListenerProcessIds {
     param(
         [Parameter(Mandatory = $true)]
         [int]$Port
     )
 
-    $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-    if ($listeners.Count -eq 0) {
-        return ,@()
+    $processIds = @()
+
+    try {
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        $processIds += @($listeners | ForEach-Object { [int]$_.OwningProcess })
     }
-    return ,@($listeners | ForEach-Object { [int]$_.OwningProcess } | Sort-Object -Unique)
+    catch {
+        # Some Windows environments deny Get-NetTCPConnection even for the
+        # current user. Fall through to netstat, which remains available.
+    }
+
+    if ($processIds.Count -eq 0) {
+        $portPattern = ':(' + [regex]::Escape([string]$Port) + ')$'
+        foreach ($line in @(& netstat -ano -p tcp 2>$null)) {
+            $columns = @($line.Trim() -split '\s+')
+            if ($columns.Count -lt 5) { continue }
+            if ($columns[0] -ne 'TCP' -or $columns[3] -ne 'LISTENING') { continue }
+            if ($columns[1] -notmatch $portPattern) { continue }
+            if ($columns[4] -match '^\d+$') {
+                $processIds += [int]$columns[4]
+            }
+        }
+    }
+
+    return ,@($processIds | Sort-Object -Unique)
 }
 
 function Get-ProjectServerProcessIds {

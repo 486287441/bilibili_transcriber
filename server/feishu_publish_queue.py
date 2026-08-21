@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from datetime import datetime
 
 from feishu_client import create_video_document
@@ -33,6 +34,73 @@ class FeishuPublishQueue:
             record_user_activity(message, **kwargs)
         except Exception:
             logger.exception("写入用户运行日志失败 task_id=%s", kwargs.get("task_id"))
+
+    @staticmethod
+    def _completion_timing(row, *, publish_sec: float) -> dict:
+        from server.progress_db import get_task_stats
+
+        stats = get_task_stats(row.task_id) or {}
+        subtitle_sec = max(0.0, float(stats.get("subtitle_sec") or 0.0))
+        download_sec = max(0.0, float(stats.get("download_sec") or 0.0))
+        model_load_sec = max(0.0, float(stats.get("model_load_sec") or 0.0))
+        transcribe_sec = max(0.0, float(stats.get("transcribe_sec") or 0.0))
+        polish_sec = max(0.0, float(stats.get("polish_sec") or 0.0))
+        measured_local = (
+            subtitle_sec + download_sec + model_load_sec + transcribe_sec + polish_sec
+        )
+        local_sec = max(
+            measured_local,
+            float(getattr(row, "processing_duration_sec", None) or 0.0),
+        )
+        other_sec = max(0.0, local_sec - measured_local)
+
+        route = getattr(row, "resolved_route", None) or "asr"
+        text_phase_label = {
+            "subtitle": "字幕获取",
+            "ocr": "画面字幕识别",
+            "asr": "语音转写",
+        }.get(route, "文字获取与转写")
+        phases = []
+        if subtitle_sec >= 0.05:
+            phases.append(
+                {"key": "subtitle", "label": "B 站字幕检查", "seconds": subtitle_sec}
+            )
+        phases.append(
+            {"key": "download", "label": "媒体下载", "seconds": download_sec}
+        )
+        if route == "asr":
+            phases.append(
+                {
+                    "key": "model_load",
+                    "label": "语音识别模型加载",
+                    "seconds": model_load_sec,
+                }
+            )
+        phases.extend(
+            [
+                {"key": "transcribe", "label": text_phase_label, "seconds": transcribe_sec},
+                {"key": "polish", "label": "文章校对与润色", "seconds": polish_sec},
+            ]
+        )
+        if other_sec >= 0.05:
+            phases.append(
+                {"key": "other", "label": "准备与本地收尾", "seconds": other_sec}
+            )
+        phases.append(
+            {"key": "publish", "label": "飞书发布", "seconds": max(0.0, publish_sec)}
+        )
+        total_sec = local_sec + max(0.0, publish_sec)
+        slowest = max(phases, key=lambda phase: phase["seconds"], default=None)
+        return {
+            "total_seconds": round(total_sec, 2),
+            "local_seconds": round(local_sec, 2),
+            "publish_seconds": round(max(0.0, publish_sec), 2),
+            "slowest_key": slowest["key"] if slowest else None,
+            "phases": [
+                {**phase, "seconds": round(float(phase["seconds"]), 2)}
+                for phase in phases
+            ],
+        }
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -104,6 +172,7 @@ class FeishuPublishQueue:
             return
 
         history_service.update_publish_state(task_id, "publishing")
+        publish_started = time.monotonic()
         self._record(
             "正在后台发布到飞书",
             task_id=task_id,
@@ -150,6 +219,17 @@ class FeishuPublishQueue:
                 level="success",
                 task_id=task_id,
                 title=row.title,
+            )
+            self._record(
+                "任务已全部完成",
+                level="success",
+                task_id=task_id,
+                title=row.title,
+                detail="本地处理和飞书发布均已完成。",
+                timing=self._completion_timing(
+                    row,
+                    publish_sec=time.monotonic() - publish_started,
+                ),
             )
             if should_auto_open_feishu():
                 open_feishu_in_browser(doc_url)

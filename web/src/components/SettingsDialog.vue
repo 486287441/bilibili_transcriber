@@ -41,16 +41,13 @@
                   type="password"
                   autocomplete="new-password"
                   spellcheck="false"
-                  :placeholder="secrets.deepseek_configured ? '已配置；输入新 Key 可替换' : '请输入 DeepSeek API Key'"
+                  :placeholder="secrets.deepseek_configured ? '已配置' : '请输入 DeepSeek API Key'"
                 />
               </label>
               <div class="editor-actions">
                 <button type="button" :disabled="saving === 'api-key' || deepseekApiKey.trim().length < 8" @click="saveDeepSeekKey">
                   {{ saving === 'api-key' ? '保存中…' : '保存 API Key' }}
                 </button>
-                <span class="api-config-state" :data-configured="secrets.deepseek_configured">
-                  {{ secrets.deepseek_configured ? '已配置' : '尚未配置' }}
-                </span>
               </div>
               <p v-if="messages.apiKey" class="storage-message" role="status">{{ messages.apiKey }}</p>
             </section>
@@ -90,7 +87,7 @@
               <textarea class="ui-scroll" v-model="advanced.transcript_correction_prompt" rows="12" spellcheck="false" aria-label="第一阶段 ASR 校对 Prompt" />
               <div class="prompt-workspace-footer">
                 <div class="editor-actions">
-                  <button type="button" :disabled="saving === 'correction'" @click="saveCorrectionPrompt">{{ saving === 'correction' ? '保存中…' : '保存第一阶段' }}</button>
+                  <button type="button" :disabled="saving === 'correction'" @click="saveCorrectionPrompt">{{ saving === 'correction' ? '保存中…' : '保存' }}</button>
                   <button type="button" class="ghost" @click="restoreCorrectionPrompt">恢复默认</button>
                 </div>
                 <p v-if="messages.correction" class="storage-message" role="status">{{ messages.correction }}</p>
@@ -142,14 +139,21 @@
               <article v-for="item in activityItems" :key="item.id" class="activity-event" :data-level="item.level">
                 <time :datetime="item.timestamp">{{ formatActivityTime(item.timestamp) }}</time>
                 <div class="activity-rail" aria-hidden="true"><span /></div>
-                <div class="activity-event-body">
+                <component
+                  :is="item.timing ? 'button' : 'div'"
+                  class="activity-event-body"
+                  :class="{ 'activity-event-trigger': item.timing }"
+                  :type="item.timing ? 'button' : undefined"
+                  :aria-label="item.timing ? `查看${item.title || '任务'}的耗时明细` : undefined"
+                  @click="item.timing && openTiming(item)"
+                >
                   <div class="activity-event-heading">
                     <strong>{{ item.message }}</strong>
-                    <span>{{ activityLevelLabel(item.level) }}</span>
+                    <span>{{ item.timing ? '查看耗时' : activityLevelLabel(item.level) }}</span>
                   </div>
                   <p v-if="item.detail">{{ item.detail }}</p>
                   <small v-if="item.title">{{ item.title }}</small>
-                </div>
+                </component>
               </article>
               <div v-if="!activityLoading && !activityItems.length" class="activity-log-empty">
                 暂无运行日志，新任务开始后会在这里显示关键步骤。
@@ -161,12 +165,14 @@
       </section>
     </form>
   </dialog>
+  <TaskTimingDialog ref="timingDialog" />
 </template>
 
 <script setup>
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { useModalAnimation } from '../composables/useModalAnimation.js'
+import TaskTimingDialog from './TaskTimingDialog.vue'
 
 const props = defineProps({
   settings: { type: Object, required: true },
@@ -183,6 +189,7 @@ const saving = ref('')
 const activityItems = ref([])
 const activityLoading = ref(false)
 const activityError = ref('')
+const timingDialog = ref(null)
 let activityTimer = null
 const sections = [
   { id: 'api', label: 'API 配置', description: 'DeepSeek 密钥与模型' },
@@ -297,6 +304,10 @@ async function updateDeepseekModel(model) {
   if (model === props.settings.deepseek_model) return
   await api.updateSettings({ deepseek_model: model })
   emit('refresh')
+}
+
+function openTiming(item) {
+  timingDialog.value?.open(item)
 }
 
 async function toggleSecondStage() {

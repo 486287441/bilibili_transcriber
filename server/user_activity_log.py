@@ -13,7 +13,7 @@ import uuid
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import config
 
@@ -52,6 +52,7 @@ def record(
     task_id: str | None = None,
     title: str | None = None,
     detail: str | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> dict:
     event = {
         "id": uuid.uuid4().hex,
@@ -62,6 +63,8 @@ def record(
         "title": (title or "").strip() or None,
         "detail": (detail or "").strip() or None,
     }
+    if timing:
+        event["timing"] = timing
     _PATH.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
         with _PATH.open("a", encoding="utf-8") as handle:

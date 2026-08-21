@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -34,6 +36,7 @@ from server.feishu_publish_queue import feishu_publish_queue
 logger = logging.getLogger("server.app")
 
 _SPA_DIST = config.PROJECT_ROOT / "web" / "dist"
+_SERVER_INSTANCE_ID = os.getenv("BILIBILI_SERVER_INSTANCE_ID") or uuid.uuid4().hex
 
 
 def _register_favicon_routes(app: FastAPI) -> None:
@@ -190,6 +193,8 @@ def create_app() -> FastAPI:
             "status": "ok",
             "version": __version__,
             "ready": is_ready(),
+            "process_id": os.getpid(),
+            "instance_id": _SERVER_INSTANCE_ID,
         }
 
     @api.get("/bootstrap")

@@ -75,7 +75,7 @@
               >追问</button>
               <button
                 type="button"
-                class="history-action history-delete"
+                class="history-action ghost"
                 @click="$emit('delete', item.id)"
               >删除</button>
             </div>

@@ -81,6 +81,12 @@ function Start-ServerBackground {
 
 Write-Host "=== start/stop regression tests (port $port) ===" -ForegroundColor Cyan
 
+$larkCli = Join-Path $ProjectRoot "tools\lark-cli\bin\lark-cli.exe"
+if (Test-Path -LiteralPath $larkCli) {
+    $authStatus = ((& $larkCli auth status --json 2>$null | Out-String) | ConvertFrom-Json)
+    Assert-True ($authStatus.identities.user.available -eq $true) "startup context can access Feishu user authorization"
+}
+
 # Ensure clean slate
 Invoke-StopAll
 
@@ -95,9 +101,17 @@ $serverProc = $null
 try {
     $serverProc = Start-ServerBackground
     Assert-True (Test-OurServerHealth -Port $port) "start_server.ps1 background health"
+    $health = Get-ServerHealthInfo -Port $port
+    $listenerIds = Get-PortListenerProcessIds -Port $port
+    Assert-True ($null -ne $health.instance_id -and ([string]$health.instance_id).Length -ge 16) "health exposes server instance identity"
+    Assert-True ($listenerIds -contains [int]$health.process_id) "health PID owns listening port"
 
     # 3b. start.bat when already running
     Assert-ExitCode { cmd /c "`"$startBat`"" } 0 "start.bat when already running (preflight skip)"
+
+    # 3c. The low-level starter must never accept an old healthy listener as
+    # the process it just launched (regression for false-success restarts).
+    Assert-ExitCode { & powershell -NoProfile -ExecutionPolicy Bypass -File $startPs1 -ProjectRoot $ProjectRoot } 1 "start_server.ps1 rejects occupied port"
 
     # 4. preflight detects running server
     Assert-ExitCode { & powershell -NoProfile -ExecutionPolicy Bypass -File $preflightPs1 -ProjectRoot $ProjectRoot } 2 "preflight when our server running"

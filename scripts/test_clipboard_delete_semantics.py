@@ -214,6 +214,32 @@ def test_deleted_task_is_removed_from_bootstrap_immediately() -> None:
         bootstrap_cache._snapshot = original_snapshot
 
 
+def test_archived_completion_is_not_reported_as_user_deletion() -> None:
+    original_db_path = queue_db.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue_db.DB_PATH = Path(temp_dir) / "queue.db"
+            queue_db.init_db()
+            task = _new_task(url="https://example.com/video/completed")
+            assert queue_db.update_task_fields(task.id, status="completed") is not None
+
+            service = QueueService()
+            events: list[tuple[str, str]] = []
+            service._evict_deleted_task = lambda task_id: None
+            service._emit_queue_updated = lambda action, task_id: events.append(
+                ("queue", action)
+            )
+            service._record_deleted = lambda *_args, **_kwargs: events.append(
+                ("activity", "deleted")
+            )
+            service.archive_completed(task.id)
+
+            assert queue_db.get_task(task.id) is None
+            assert events == [("queue", "archive")]
+    finally:
+        queue_db.DB_PATH = original_db_path
+
+
 if __name__ == "__main__":
     test_deleted_clipboard_event_is_consumed_only_once()
     print("PASS test_deleted_clipboard_event_is_consumed_only_once")
@@ -227,4 +253,6 @@ if __name__ == "__main__":
     print("PASS test_claim_delete_race_100_rounds")
     test_deleted_task_is_removed_from_bootstrap_immediately()
     print("PASS test_deleted_task_is_removed_from_bootstrap_immediately")
-    print("ALL PASS (6 tests)")
+    test_archived_completion_is_not_reported_as_user_deletion()
+    print("PASS test_archived_completion_is_not_reported_as_user_deletion")
+    print("ALL PASS (7 tests)")

@@ -252,6 +252,15 @@ class QueueService:
             return
         raise TaskInProgressError("无法删除该状态的任务")
 
+    def archive_completed(self, task_id: str) -> None:
+        """Remove an archived completed task without presenting it as user deletion."""
+        task = self.get(task_id)
+        if task.status != "completed":
+            raise TaskInProgressError("只能归档已完成的任务")
+        queue_db.delete_task(task_id)
+        self._evict_deleted_task(task_id)
+        self._emit_queue_updated("archive", task_id)
+
     def cancel(self, task_id: str) -> TaskRow:
         task = self.get(task_id)
         if task.status == "pending":

@@ -13,13 +13,24 @@ Set-StrictMode -Version Latest
 $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $port = Get-ProjectServerPort -ProjectRoot $ProjectRoot
 $python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$larkCli = Join-Path $ProjectRoot "tools\lark-cli\bin\lark-cli.exe"
 $logsDir = Get-ProjectLogsDir -ProjectRoot $ProjectRoot
 
 function Wait-ServerHealth {
-    param([int]$TimeoutSec = 300)
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedInstanceId,
+        [int]$TimeoutSec = 300
+    )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-OurServerHealth -Port $port) { return $true }
+        $health = Get-ServerHealthInfo -Port $port
+        if ($health -and $health.status -eq 'ok' -and $health.ready -eq $true) {
+            $listenerIds = Get-PortListenerProcessIds -Port $port
+            $instanceMatches = ($null -ne $health.instance_id) -and ([string]$health.instance_id -eq $ExpectedInstanceId)
+            $listenerPidMatches = ($null -ne $health.process_id) -and ($listenerIds -contains [int]$health.process_id)
+            if ($instanceMatches -and $listenerPidMatches) { return $true }
+        }
         Start-Sleep -Milliseconds 500
     }
     return $false
@@ -39,21 +50,65 @@ if (-not $?) {
     exit 1
 }
 
+if (-not (Test-Path -LiteralPath $larkCli)) {
+    Write-Host "[error] lark-cli not found: $larkCli"
+    Write-StartupLog -ProjectRoot $ProjectRoot -Message "ERROR lark-cli missing"
+    exit 1
+}
+
+try {
+    $authOutput = (& $larkCli auth status --json 2>$null | Out-String)
+    $authStatus = $authOutput | ConvertFrom-Json
+    $userAuth = $authStatus.identities.user
+    if (-not $userAuth -or $userAuth.available -ne $true) {
+        throw "user authorization unavailable"
+    }
+}
+catch {
+    Write-Host "[error] current Windows context cannot access Feishu user authorization"
+    Write-Host "[error] start the server from the normal desktop user session; do not use a restricted/sandboxed process"
+    Write-StartupLog -ProjectRoot $ProjectRoot -Message "ERROR Feishu user authorization unavailable in current context"
+    exit 1
+}
+
+$existingListeners = Get-PortListenerProcessIds -Port $port
+if ($existingListeners.Count -gt 0) {
+    Write-Host "[error] refusing to start: port $port is already listening (PID=$($existingListeners -join ', '))"
+    Write-Host "[error] run stop.bat first, or use start.bat --restart"
+    Write-StartupLog -ProjectRoot $ProjectRoot -Message "ERROR port occupied before spawn PID=$($existingListeners -join ',')"
+    exit 1
+}
+
 Write-StartupLog -ProjectRoot $ProjectRoot -Message "starting python -m server (port $port)"
 
-$proc = Start-Process `
-    -FilePath $python `
-    -ArgumentList "-m", "server" `
-    -WorkingDirectory $ProjectRoot `
-    -WindowStyle Hidden `
-    -PassThru
+$instanceId = [guid]::NewGuid().ToString('N')
+$previousInstanceId = $env:BILIBILI_SERVER_INSTANCE_ID
+try {
+    $env:BILIBILI_SERVER_INSTANCE_ID = $instanceId
+    $proc = Start-Process `
+        -FilePath $python `
+        -ArgumentList "-m", "server" `
+        -WorkingDirectory $ProjectRoot `
+        -WindowStyle Hidden `
+        -PassThru
+}
+finally {
+    if ($null -eq $previousInstanceId) {
+        Remove-Item Env:BILIBILI_SERVER_INSTANCE_ID -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:BILIBILI_SERVER_INSTANCE_ID = $previousInstanceId
+    }
+}
 
-Write-StartupLog -ProjectRoot $ProjectRoot -Message "spawned PID=$($proc.Id)"
+Write-StartupLog -ProjectRoot $ProjectRoot -Message "spawned PID=$($proc.Id) instance=$instanceId"
 
-if (Wait-ServerHealth) {
-    Write-Host "[done] server running at http://127.0.0.1:$port/ (PID=$($proc.Id))"
+if (Wait-ServerHealth -ExpectedInstanceId $instanceId) {
+    $health = Get-ServerHealthInfo -Port $port
+    $actualPid = [int]$health.process_id
+    Write-Host "[done] server running at http://127.0.0.1:$port/ (PID=$actualPid)"
     Write-Host "[info] logs: $logsDir"
-    Write-StartupLog -ProjectRoot $ProjectRoot -Message "healthy PID=$($proc.Id)"
+    Write-StartupLog -ProjectRoot $ProjectRoot -Message "healthy PID=$actualPid instance=$instanceId"
     exit 0
 }
 

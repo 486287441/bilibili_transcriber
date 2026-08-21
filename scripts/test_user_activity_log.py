@@ -28,10 +28,15 @@ def main() -> int:
                 "正在加载语音识别模型",
                 detail="首次加载需要读取本地模型。",
                 task_id="task-1",
+                timing={
+                    "total_seconds": 12.5,
+                    "phases": [{"key": "download", "label": "媒体下载", "seconds": 2.5}],
+                },
             )
             items = user_activity_log.recent(limit=20)
             assert [item["id"] for item in items] == [second["id"], first["id"]]
             assert items[0]["message"] == "正在加载语音识别模型"
+            assert items[0]["timing"]["total_seconds"] == 12.5
             assert items[1]["level"] == "success"
             assert "download models from model hub" not in user_activity_log._PATH.read_text(
                 encoding="utf-8"
