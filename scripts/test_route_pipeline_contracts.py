@@ -184,6 +184,7 @@ def _install_worker_import_stubs() -> None:
     _install_module(
         "server.settings_store",
         get_auto_fallback_route=lambda: "asr",
+        is_first_stage_enabled=lambda: True,
         should_auto_open_feishu=lambda: False,
     )
     _install_module("server.progress_tracker", progress_tracker=progress)
@@ -214,8 +215,6 @@ class RouteHarness:
         *,
         site: str,
         requested_route: str,
-        subtitle_segments: list[TranscriptSegment] | None = None,
-        subtitle_auth_error: bool = False,
         hard_subtitle_found: bool = False,
         ocr_segments: list[TranscriptSegment] | None = None,
         auto_fallback_route: str = "asr",
@@ -237,13 +236,10 @@ class RouteHarness:
             requested_route=requested_route,
         )
         self.queue = FakeQueueService(self.task)
-        self.subtitle_segments = list(subtitle_segments or [])
-        self.subtitle_auth_error = subtitle_auth_error
         self.hard_subtitle_found = hard_subtitle_found
         self.ocr_segments = list(ocr_segments or [])
         self.auto_fallback_route = auto_fallback_route
         self.calls: dict[str, int] = {
-            "subtitle_fetch": 0,
             "video_download": 0,
             "ocr_model_load": 0,
             "hard_subtitle_detect": 0,
@@ -272,35 +268,6 @@ class RouteHarness:
 
     def _install_fakes(self) -> None:
         harness = self
-
-        class SubtitleResult:
-            def __init__(self) -> None:
-                self.segments = list(harness.subtitle_segments)
-                self.title = "字幕元数据标题"
-                self.webpage_url = harness.task.url
-                self.duration_sec = 60.0
-                self.diagnostics = {
-                    "platform_subtitle_found": bool(self.segments),
-                }
-
-            @property
-            def found(self) -> bool:
-                return bool(self.segments)
-
-        def fetch_bilibili_subtitles(_url: str) -> SubtitleResult:
-            self._count("subtitle_fetch")
-            if self.subtitle_auth_error:
-                raise BilibiliSubtitleAuthError("B站字幕鉴权失败：测试 Cookie 已失效")
-            return SubtitleResult()
-
-        class BilibiliSubtitleAuthError(RuntimeError):
-            pass
-
-        _install_module(
-            "server.bilibili_subtitles",
-            BilibiliSubtitleAuthError=BilibiliSubtitleAuthError,
-            fetch_bilibili_subtitles=fetch_bilibili_subtitles,
-        )
 
         class OCRExtractionCancelled(RuntimeError):
             pass
@@ -443,32 +410,11 @@ class RouteHarness:
         return self.final
 
 
-def _subtitle(text: str = "B站官方字幕") -> list[TranscriptSegment]:
-    return [TranscriptSegment(0.0, 2.0, text, source="subtitle")]
-
-
 def _ocr(text: str = "画面硬字幕") -> list[TranscriptSegment]:
     return [TranscriptSegment(0.0, 2.0, text, confidence=0.95, source="ocr")]
 
 
-def test_auto_bilibili_subtitle_does_not_load_ocr_or_asr() -> None:
-    with RouteHarness(
-        site="bilibili",
-        requested_route="auto",
-        subtitle_segments=_subtitle(),
-    ) as harness:
-        final = harness.run()
-
-        assert final.status == "completed"
-        assert final.resolved_route == "subtitle"
-        assert harness.calls["subtitle_fetch"] == 1
-        assert harness.calls["video_download"] == 0
-        assert harness.calls["ocr_model_load"] == 0
-        assert harness.calls["asr_model_load"] == 0
-        assert harness.calls["asr_transcribe"] == 0
-
-
-def test_auto_without_platform_subtitle_uses_configured_ocr_only() -> None:
+def test_auto_uses_configured_ocr_only() -> None:
     with RouteHarness(
         site="bilibili",
         requested_route="auto",
@@ -479,7 +425,6 @@ def test_auto_without_platform_subtitle_uses_configured_ocr_only() -> None:
 
         assert final.status == "completed"
         assert final.resolved_route == "ocr"
-        assert harness.calls["subtitle_fetch"] == 1
         assert harness.calls["video_download"] == 1
         assert harness.calls["ocr_model_load"] == 1
         assert harness.calls["hard_subtitle_detect"] == 0
@@ -488,25 +433,7 @@ def test_auto_without_platform_subtitle_uses_configured_ocr_only() -> None:
         assert harness.calls["asr_transcribe"] == 0
 
 
-def test_auto_auth_failure_uses_configured_ocr_fallback() -> None:
-    with RouteHarness(
-        site="bilibili",
-        requested_route="auto",
-        subtitle_auth_error=True,
-        ocr_segments=_ocr(),
-        auto_fallback_route="ocr",
-    ) as harness:
-        final = harness.run()
-
-        assert final.status == "completed"
-        assert final.resolved_route == "ocr"
-        assert final.route_diagnostics["platform_subtitle_auth_failed"] is True
-        assert "鉴权失败" in final.route_diagnostics["platform_subtitle_probe_error"]
-        assert harness.calls["subtitle_fetch"] == 1
-        assert harness.calls["ocr_extract"] == 1
-
-
-def test_auto_without_any_subtitle_falls_back_to_asr() -> None:
+def test_auto_configured_asr_goes_directly_to_asr() -> None:
     with RouteHarness(
         site="bilibili",
         requested_route="auto",
@@ -516,7 +443,6 @@ def test_auto_without_any_subtitle_falls_back_to_asr() -> None:
 
         assert final.status == "completed"
         assert final.resolved_route == "asr"
-        assert harness.calls["subtitle_fetch"] == 1
         assert harness.calls["video_download"] == 0
         assert harness.calls["hard_subtitle_detect"] == 0
         assert harness.calls["ocr_extract"] == 0
@@ -538,7 +464,6 @@ def test_explicit_ocr_empty_result_fails_without_asr_fallback() -> None:
         assert final.status == "failed"
         assert final.resolved_route == "ocr"
         assert "未从画面底部识别到可用字幕" in (final.error_message or "")
-        assert harness.calls["subtitle_fetch"] == 0
         assert harness.calls["hard_subtitle_detect"] == 0
         assert harness.calls["ocr_extract"] == 1
         assert harness.calls["video_audio_extract"] == 0
@@ -553,7 +478,6 @@ def test_non_bilibili_auto_goes_directly_to_asr() -> None:
 
         assert final.status == "completed"
         assert final.resolved_route == "asr"
-        assert harness.calls["subtitle_fetch"] == 0
         assert harness.calls["video_download"] == 0
         assert harness.calls["ocr_model_load"] == 0
         assert harness.calls["audio_download"] == 1
@@ -580,10 +504,8 @@ def test_auto_configured_ocr_empty_fails_without_asr_fallback() -> None:
 
 def main() -> int:
     tests = [
-        test_auto_bilibili_subtitle_does_not_load_ocr_or_asr,
-        test_auto_without_platform_subtitle_uses_configured_ocr_only,
-        test_auto_auth_failure_uses_configured_ocr_fallback,
-        test_auto_without_any_subtitle_falls_back_to_asr,
+        test_auto_uses_configured_ocr_only,
+        test_auto_configured_asr_goes_directly_to_asr,
         test_explicit_ocr_empty_result_fails_without_asr_fallback,
         test_non_bilibili_auto_goes_directly_to_asr,
         test_auto_configured_ocr_empty_fails_without_asr_fallback,

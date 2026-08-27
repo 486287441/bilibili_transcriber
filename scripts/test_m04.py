@@ -40,6 +40,17 @@ def test_bilibili_part_dedup_keys() -> None:
     print("bilibili part dedup keys PASS")
 
 
+def test_bilibili_download_is_limited_to_selected_part() -> None:
+    from bilibili_transcriber import _ydl_opts_for_site
+
+    bilibili_opts = _ydl_opts_for_site("bilibili")
+    youtube_opts = _ydl_opts_for_site("youtube")
+
+    assert bilibili_opts["noplaylist"] is True
+    assert "noplaylist" not in youtube_opts
+    print("bilibili selected-part download PASS")
+
+
 def test_history_dedup() -> None:
     import uuid
 
@@ -129,6 +140,7 @@ def test_api_manual_enqueue_structure() -> None:
 def main() -> int:
     test_url_extraction_rejects_non_video()
     test_bilibili_part_dedup_keys()
+    test_bilibili_download_is_limited_to_selected_part()
     test_history_dedup()
     test_clipboard_silent_dedup()
     try:

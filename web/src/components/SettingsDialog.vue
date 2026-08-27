@@ -73,50 +73,68 @@
           <div v-else-if="activeSection === 'prompts'" class="settings-page prompt-settings-page">
             <div class="prompt-stage-tabs" role="tablist" aria-label="Prompt 阶段">
               <button type="button" role="tab" :aria-selected="activePromptStage === 'first'" :class="{ active: activePromptStage === 'first' }" @click="activePromptStage = 'first'">
-                <strong>第一阶段</strong><small>ASR 校对</small>
+                <strong>第一阶段</strong><small>AI 优化断句</small>
               </button>
               <button type="button" role="tab" :aria-selected="activePromptStage === 'second'" :class="{ active: activePromptStage === 'second' }" @click="activePromptStage = 'second'">
-                <strong>第二阶段</strong><small>{{ secondStageEnabled ? '内容整理' : '已关闭' }}</small>
+                <strong>第二阶段</strong><small>AI 总结</small>
               </button>
             </div>
 
             <section v-if="activePromptStage === 'first'" class="prompt-workspace" role="tabpanel">
               <div class="prompt-workspace-heading">
-                <div><h3>第一阶段 · ASR 校对 Prompt</h3><p>用于断句、恢复标点和保守纠错。</p></div>
+                <div><h3>第一阶段 · AI 优化断句</h3><p>开启后使用 AI 优化断句和标点，并对明显的识别错误进行保守校正。</p></div>
+                <button
+                  type="button"
+                  class="stage-switch"
+                  role="switch"
+                  :aria-checked="firstStageEnabled"
+                  :disabled="saving === 'first-stage'"
+                  @click="toggleFirstStage"
+                >
+                  <span class="stage-switch-track" aria-hidden="true"><i /></span>
+                  <span>{{ firstStageEnabled ? '已启用' : '已关闭' }}</span>
+                </button>
               </div>
-              <textarea class="ui-scroll" v-model="advanced.transcript_correction_prompt" rows="12" spellcheck="false" aria-label="第一阶段 ASR 校对 Prompt" />
-              <div class="prompt-workspace-footer">
+              <textarea v-if="firstStageEnabled" class="ui-scroll" v-model="advanced.transcript_correction_prompt" rows="12" spellcheck="false" aria-label="第一阶段 AI 优化断句 Prompt" />
+              <div v-else class="second-stage-disabled-note">
+                关闭后不使用 AI 优化断句，将保留语音转写原有标点，只进行本地规则排版，然后直接发布到飞书。
+              </div>
+              <div v-if="firstStageEnabled" class="prompt-workspace-footer">
                 <div class="editor-actions">
                   <button type="button" :disabled="saving === 'correction'" @click="saveCorrectionPrompt">{{ saving === 'correction' ? '保存中…' : '保存' }}</button>
                   <button type="button" class="ghost" @click="restoreCorrectionPrompt">恢复默认</button>
                 </div>
                 <p v-if="messages.correction" class="storage-message" role="status">{{ messages.correction }}</p>
               </div>
+              <p v-if="messages.correction && !firstStageEnabled" class="storage-message second-stage-message" role="status">{{ messages.correction }}</p>
             </section>
 
             <section v-else class="prompt-workspace" role="tabpanel">
               <div class="prompt-workspace-heading">
-                <div><h3>第二阶段 · 内容整理 Prompt</h3><p>用于生成总结、目录和章节。</p></div>
+                <div><h3>第二阶段 · AI 总结</h3><p>开启后使用 AI 生成视频总结、内容目录和章节结构。</p></div>
                 <button
                   type="button"
                   class="stage-switch"
                   role="switch"
                   :aria-checked="secondStageEnabled"
-                  :disabled="saving === 'second-stage'"
+                  :disabled="saving === 'second-stage' || !firstStageEnabled"
                   @click="toggleSecondStage"
                 >
                   <span class="stage-switch-track" aria-hidden="true"><i /></span>
                   <span>{{ secondStageEnabled ? '已启用' : '已关闭' }}</span>
                 </button>
               </div>
-              <textarea v-if="secondStageEnabled" class="ui-scroll" v-model="advanced.polish_prompt_template" rows="12" spellcheck="false" aria-label="第二阶段内容整理 Prompt" />
+              <textarea v-if="firstStageEnabled && secondStageEnabled" class="ui-scroll" v-model="advanced.polish_prompt_template" rows="12" spellcheck="false" aria-label="第二阶段 AI 总结 Prompt" />
+              <div v-else-if="!firstStageEnabled" class="second-stage-disabled-note">
+                第一阶段关闭时为快速模式，不调用 AI，因此也不会生成第二阶段的 AI 总结。当前设置会保留到重新启用第一阶段后使用。
+              </div>
               <div v-else class="second-stage-disabled-note">
-                第一阶段完成后将直接生成文章，不再发起第二次 DeepSeek 请求。
+                关闭后不生成 AI 总结，第一阶段处理完成后将直接生成文章并发布。
               </div>
               <p v-if="messages.polish && !secondStageEnabled" class="storage-message second-stage-message" role="status">{{ messages.polish }}</p>
-              <div v-if="secondStageEnabled" class="prompt-workspace-footer">
+              <div v-if="firstStageEnabled && secondStageEnabled" class="prompt-workspace-footer">
                 <div class="editor-actions">
-                  <button type="button" :disabled="saving === 'polish'" @click="savePolishPrompt">{{ saving === 'polish' ? '保存中…' : '保存第二阶段' }}</button>
+                  <button type="button" :disabled="saving === 'polish'" @click="savePolishPrompt">{{ saving === 'polish' ? '保存中…' : '保存 AI 总结设置' }}</button>
                   <button type="button" class="ghost" @click="restorePolishPrompt">恢复默认</button>
                 </div>
                 <p v-if="messages.polish" class="storage-message" role="status">{{ messages.polish }}</p>
@@ -207,11 +225,13 @@ const advancedDefaults = reactive({
 })
 const advanced = reactive({ ...advancedDefaults })
 const messages = reactive({ apiKey: '', correction: '', polish: '' })
+const firstStageEnabled = ref(true)
 const secondStageEnabled = ref(true)
 
 function syncPromptDrafts() {
   advanced.transcript_correction_prompt = props.settings.transcript_correction_prompt || advancedDefaults.transcript_correction_prompt || ''
   advanced.polish_prompt_template = props.settings.polish_prompt_template || advancedDefaults.polish_prompt_template || ''
+  firstStageEnabled.value = props.settings.first_stage_enabled !== false
   secondStageEnabled.value = props.settings.second_stage_enabled !== false
 }
 
@@ -322,6 +342,26 @@ async function toggleSecondStage() {
   } catch (error) {
     secondStageEnabled.value = previous
     messages.polish = error.message || '第二阶段设置保存失败'
+  } finally {
+    saving.value = ''
+  }
+}
+
+async function toggleFirstStage() {
+  if (saving.value) return
+  const previous = firstStageEnabled.value
+  firstStageEnabled.value = !previous
+  saving.value = 'first-stage'
+  messages.correction = ''
+  try {
+    await api.updateSettings({ first_stage_enabled: firstStageEnabled.value })
+    messages.correction = firstStageEnabled.value
+      ? '第一阶段已启用，后续任务将使用 DeepSeek 校对。'
+      : '快速模式已启用，后续任务将保留 ASR 标点并进行本地排版。'
+    emit('refresh')
+  } catch (error) {
+    firstStageEnabled.value = previous
+    messages.correction = error.message || '第一阶段设置保存失败'
   } finally {
     saving.value = ''
   }

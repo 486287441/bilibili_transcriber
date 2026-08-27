@@ -15,10 +15,10 @@ import config
 
 DB_PATH = config.PROJECT_ROOT / "data" / "queue.db"
 
-RequestedRoute = Literal["auto", "subtitle", "ocr", "asr"]
-ResolvedRoute = Literal["subtitle", "ocr", "asr"]
-REQUESTED_ROUTES = frozenset({"auto", "subtitle", "ocr", "asr"})
-RESOLVED_ROUTES = frozenset({"subtitle", "ocr", "asr"})
+RequestedRoute = Literal["auto", "ocr", "asr"]
+ResolvedRoute = Literal["ocr", "asr"]
+REQUESTED_ROUTES = frozenset({"auto", "ocr", "asr"})
+RESOLVED_ROUTES = frozenset({"ocr", "asr"})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (

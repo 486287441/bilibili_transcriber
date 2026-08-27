@@ -23,7 +23,11 @@ from server.pipeline_runner import (
     transcribe_with_progress,
 )
 from server.polish_estimate import estimate_input_tokens
-from server.settings_store import get_auto_fallback_route, should_auto_open_feishu
+from server.settings_store import (
+    get_auto_fallback_route,
+    is_first_stage_enabled,
+    should_auto_open_feishu,
+)
 from server.progress_tracker import progress_tracker
 from server.queue_db import TaskRow
 from server.queue_service import TaskNotFoundError, queue_service
@@ -543,115 +547,8 @@ class WorkerService:
             meta = {"title": task.title or "未命名视频", "url": task.url}
             segments: list[TranscriptSegment] = []
 
-            # Route 1: official Bilibili CC subtitles.  Other sites skip this
-            # probe and use the single fallback selected in settings.
-            should_probe_subtitle = requested_route in {"auto", "subtitle"}
-            if should_probe_subtitle:
-                if task.site != "bilibili":
-                    if requested_route == "subtitle":
-                        raise TranscriptRouteUnavailable("B站字幕路线只支持 B 站视频")
-                    diagnostics["platform_subtitle_skipped"] = "non_bilibili_site"
-                else:
-                    from server.bilibili_subtitles import (
-                        BilibiliSubtitleAuthError,
-                        fetch_bilibili_subtitles,
-                    )
-
-                    progress_tracker.set_phase(task.id, "download")
-                    progress_tracker.update(
-                        task.id,
-                        phase_progress=3.0,
-                        detail={"message": "正在检测 B 站字幕"},
-                    )
-                    self._user_log(task, "正在检查 B 站官方字幕")
-                    subtitle_started = time.monotonic()
-                    try:
-                        subtitle_result = fetch_bilibili_subtitles(task.url)
-                    except BilibiliSubtitleAuthError as exc:
-                        phase_times["subtitle"] = phase_times.get("subtitle", 0.0) + (
-                            time.monotonic() - subtitle_started
-                        )
-                        diagnostics.update(
-                            {
-                                "platform_subtitle_auth_failed": True,
-                                "platform_subtitle_probe_error": str(exc)[:500],
-                            }
-                        )
-                        progress_tracker.update(
-                            task.id,
-                            phase_progress=8.0,
-                            detail={
-                                "message": (
-                                    f"B站字幕鉴权失败，按设置切换{('画面 OCR' if auto_fallback_route == 'ocr' else '语音识别')}"
-                                    if requested_route == "auto"
-                                    else "B站字幕鉴权失败"
-                                ),
-                                "warning": str(exc),
-                            },
-                        )
-                        logger.warning("B站字幕鉴权失败 task_id=%s: %s", task.id, exc)
-                        self._user_log(
-                            task,
-                            "B 站字幕鉴权失败",
-                            level="warning",
-                            detail=(
-                                f"已按设置切换到{('画面 OCR' if auto_fallback_route == 'ocr' else '语音识别')}。"
-                                if requested_route == "auto"
-                                else str(exc)
-                            ),
-                        )
-                        if requested_route == "subtitle":
-                            raise TranscriptRouteUnavailable(str(exc)) from exc
-                    except Exception as exc:
-                        phase_times["subtitle"] = phase_times.get("subtitle", 0.0) + (
-                            time.monotonic() - subtitle_started
-                        )
-                        if requested_route == "subtitle":
-                            raise RuntimeError(f"B站字幕检测失败: {exc}") from exc
-                        diagnostics["platform_subtitle_probe_error"] = str(exc)[:500]
-                        logger.warning("B站字幕检测失败，自动路线继续: %s", exc)
-                    else:
-                        phase_times["subtitle"] = phase_times.get("subtitle", 0.0) + (
-                            time.monotonic() - subtitle_started
-                        )
-                        task, meta = self._apply_metadata(
-                            task,
-                            {
-                                "title": subtitle_result.title,
-                                "url": subtitle_result.webpage_url,
-                                "duration": subtitle_result.duration_sec,
-                            },
-                        )
-                        diagnostics.update(subtitle_result.diagnostics)
-                        if subtitle_result.found:
-                            segments = subtitle_result.segments
-                            diagnostics.update(
-                                {
-                                    "resolved_route": "subtitle",
-                                    "route_reason": "platform_subtitle_available",
-                                }
-                            )
-                            task = queue_service.update_route_details(
-                                task.id,
-                                resolved_route="subtitle",
-                                route_diagnostics=diagnostics,
-                            )
-                            progress_tracker.update(task.id, phase_progress=100.0)
-                            task = self._ensure_transcribing(task.id)
-                            progress_tracker.set_phase(task.id, "transcribe")
-                            progress_tracker.update(
-                                task.id,
-                                phase_progress=100.0,
-                                detail={"message": "B 站字幕提取完成"},
-                            )
-                            self._user_log(task, "B 站官方字幕下载完成", level="success")
-                        elif requested_route == "subtitle":
-                            raise TranscriptRouteUnavailable(
-                                "该视频没有可用的 B 站字幕（登录 Cookie 可能是必需的）"
-                            )
-
-            # Route 2: PaddleOCR PP-OCRv5.  Automatic mode uses exactly the
-            # fallback selected in settings; it never chains OCR then ASR.
+            # Route 1: PaddleOCR PP-OCRv5. Automatic mode uses exactly the
+            # route selected in settings; it never chains OCR then ASR.
             should_try_ocr = not segments and effective_fallback_route == "ocr"
             if should_try_ocr:
                 self._user_log(task, "开始下载画面识别所需的视频")
@@ -739,10 +636,10 @@ class WorkerService:
                             time.monotonic() - t0
                         )
 
-            # Route 3: the original audio download + Fun-ASR-Nano path.  In
-            # automatic mode this runs only when ASR is the configured fallback.
+            # Route 2: audio download + Fun-ASR-Nano. In automatic mode this
+            # runs only when ASR is the configured route.
             if not segments:
-                if requested_route == "subtitle" or effective_fallback_route == "ocr":
+                if effective_fallback_route == "ocr":
                     raise TranscriptRouteUnavailable("所选路线没有生成可用文本")
                 if (
                     task.reprocess_mode == "transcribe_and_polish"
@@ -788,11 +685,16 @@ class WorkerService:
                 return
 
             task = queue_service.transition(task.id, "polishing")
-            # Close the transcribe->polish cancellation race.  Once this
-            # checkpoint passes, the DeepSeek request is treated atomically.
+            # Close the transcribe->article-processing cancellation race.
             if self._check_cancelled(task):
                 return
-            self._user_log(task, "开始进行第一阶段校对和第二阶段内容整理")
+            quick_mode = not is_first_stage_enabled()
+            self._user_log(
+                task,
+                "开始进行本地规则排版"
+                if quick_mode
+                else "开始进行第一阶段校对和第二阶段内容整理",
+            )
             t0 = time.monotonic()
             try:
                 ok, doc_url = polish_with_progress(
@@ -814,11 +716,17 @@ class WorkerService:
                 return
 
             if not ok:
-                final = queue_service.handle_failure(task.id, "润色失败（已执行回退流程）")
+                final = queue_service.handle_failure(task.id, "文章处理失败（已执行回退流程）")
                 self._finalize_task(task, final, started_at=started_mono, audio_file=audio_file)
                 return
 
-            self._user_log(task, "文章润色完成，本地 Markdown 已生成", level="success")
+            self._user_log(
+                task,
+                "本地规则排版完成，Markdown 已生成"
+                if quick_mode
+                else "文章润色完成，本地 Markdown 已生成",
+                level="success",
+            )
 
             final = queue_service.complete(task.id, doc_url=doc_url or "", text_path=text_path)
             logger.info(
@@ -832,13 +740,12 @@ class WorkerService:
                 progress_db.record_stats(
                     task_id=task.id,
                     duration_sec=task.duration_sec,
-                    subtitle_sec=phase_times.get("subtitle", 0.0),
                     download_sec=phase_times.get("download", 0.0),
                     model_load_sec=phase_times.get("model_load", 0.0),
                     transcribe_sec=phase_times.get("transcribe", 0.0),
                     polish_sec=phase_times.get("polish", 0.0),
                     polish_chars=len(text),
-                    polish_tokens=estimate_input_tokens(len(text)),
+                    polish_tokens=0 if quick_mode else estimate_input_tokens(len(text)),
                 )
             except Exception:
                 # Metrics are observational.  Never turn a successfully

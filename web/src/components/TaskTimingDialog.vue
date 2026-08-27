@@ -18,9 +18,15 @@
 
       <div class="task-timing-content">
         <section class="task-timing-overview" aria-label="总耗时概览">
-          <div>
-            <span>全流程总耗时</span>
-            <strong>{{ formatDuration(timing.total_seconds) }}</strong>
+          <div class="task-timing-overview-metrics">
+            <div class="task-timing-primary-metric">
+              <span>全流程总耗时</span>
+              <strong>{{ formatDuration(timing.total_seconds) }}</strong>
+            </div>
+            <div v-if="hasVideoDuration" class="task-timing-context-metric">
+              <span>视频时长</span>
+              <strong>{{ formatDuration(timing.video_duration_seconds) }}</strong>
+            </div>
           </div>
           <p v-if="slowestPhase">
             最慢阶段为<strong>{{ slowestPhase.label }}</strong>，占总耗时约 {{ phasePercent(slowestPhase) }}%。
@@ -60,6 +66,7 @@ const title = ref('')
 const timing = ref({ total_seconds: 0, phases: [] })
 const { openModal, closeModal } = useModalAnimation()
 const phases = computed(() => Array.isArray(timing.value.phases) ? timing.value.phases : [])
+const hasVideoDuration = computed(() => Number(timing.value.video_duration_seconds) > 0)
 const slowestPhase = computed(() => (
   phases.value.find((phase) => phase.key === timing.value.slowest_key)
   || phases.value.reduce((best, phase) => !best || phase.seconds > best.seconds ? phase : best, null)

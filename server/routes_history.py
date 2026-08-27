@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api")
 
 class ReprocessBody(BaseModel):
     mode: str = Field(default="full", pattern="^(full|polish_only|transcribe_and_polish)$")
-    requested_route: Literal["auto", "subtitle", "ocr", "asr"] = "auto"
+    requested_route: Literal["auto", "ocr", "asr"] = "auto"
 
 
 class ChatMessage(BaseModel):

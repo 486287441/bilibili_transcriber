@@ -1,4 +1,4 @@
-"""Post-transcription publish pipeline: DeepSeek → Feishu, with Doubao fallback."""
+"""Post-transcription pipeline: local/DeepSeek processing, then Feishu publish."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ import pyperclip
 from deepseek_client import DeepSeekError, correct_transcript, organize_transcript
 from feishu_client import FeishuError, create_video_document
 from prompts import build_doubao_prompt
-from server.settings_store import is_second_stage_enabled
+from server.settings_store import is_first_stage_enabled, is_second_stage_enabled
+from transcript_processing import format_transcript_locally
 
 DOUBAO_URL = "https://www.doubao.com/"
 _PROJECT_ROOT = Path(__file__).resolve().parent
@@ -88,24 +89,44 @@ def postprocess_article(
     input_is_trusted: bool = False,
     task_id: str | None = None,
     cancelled=None,
+    progress_callback=None,
 ) -> tuple[str, str]:
     """Generate the final Markdown locally without waiting for Feishu."""
-    if input_is_trusted:
+    first_stage_enabled = is_first_stage_enabled()
+    if not first_stage_enabled and not input_is_trusted:
+        print("\n[快速模式] 保留 ASR 标点，正在进行本地规则排版...")
+        trusted_text = format_transcript_locally(raw_text)
+    elif input_is_trusted:
         trusted_text = raw_text.strip()
     else:
         print("\n[DeepSeek] 断句、标点与保守纠错中...")
-        trusted_text = correct_transcript(raw_text)
+        if progress_callback is None:
+            trusted_text = correct_transcript(raw_text)
+        else:
+            trusted_text = correct_transcript(
+                raw_text,
+                progress_callback=lambda event: progress_callback("correct", event),
+            )
     _check_cancelled(cancelled)
     if task_id:
         transcript_path = _PROJECT_ROOT / "downloads" / "transcripts" / f"{task_id}.txt"
         transcript_path.parent.mkdir(parents=True, exist_ok=True)
         transcript_path.write_text(trusted_text.strip() + "\n", encoding="utf-8")
 
-    if is_second_stage_enabled():
+    if first_stage_enabled and is_second_stage_enabled():
         print("[DeepSeek] 生成总结、目录与章节中...")
-        body_md = organize_transcript(trusted_text)
-    else:
+        if progress_callback is None:
+            body_md = organize_transcript(trusted_text)
+        else:
+            body_md = organize_transcript(
+                trusted_text,
+                progress_callback=lambda event: progress_callback("organize", event),
+            )
+    elif first_stage_enabled:
         print("[DeepSeek] 第二阶段已关闭，直接使用第一阶段结果。")
+        body_md = trusted_text
+    else:
+        print("[快速模式] 已跳过全部 DeepSeek 阶段，使用本地排版稿。")
         body_md = trusted_text
     _check_cancelled(cancelled)
     return body_md, trusted_text
@@ -117,6 +138,7 @@ def generate_local_article_result(
     task_id: str,
     input_is_trusted: bool = False,
     cancelled=None,
+    progress_callback=None,
 ) -> bool:
     """Generate and persist Markdown; publishing is intentionally out of band."""
     _check_cancelled(cancelled)
@@ -127,6 +149,7 @@ def generate_local_article_result(
             task_id=task_id,
             input_is_trusted=input_is_trusted,
             cancelled=cancelled,
+            progress_callback=progress_callback,
         )
     except PipelineCancelled:
         _cleanup_cancelled_outputs(task_id)
@@ -136,14 +159,14 @@ def generate_local_article_result(
             _cleanup_cancelled_outputs(task_id)
             return False
         print(f"\n[失败] 润色失败: {exc}")
-        fallback_to_doubao(raw_text)
+        _fallback_after_processing_error(raw_text)
         return False
     except Exception as exc:
         if cancelled is not None and cancelled():
             _cleanup_cancelled_outputs(task_id)
             return False
         print(f"\n[失败] 未预期错误: {exc}")
-        fallback_to_doubao(raw_text)
+        _fallback_after_processing_error(raw_text)
         return False
 
     from server.article_store import save_polished
@@ -165,6 +188,14 @@ def fallback_to_doubao(raw_text: str) -> None:
     print("[回退] 已进入豆包模式：转写原文已复制到剪贴板。")
     print("[回退] 正在打开豆包...")
     webbrowser.open(DOUBAO_URL)
+
+
+def _fallback_after_processing_error(raw_text: str) -> None:
+    """Use the legacy cloud fallback only when DeepSeek processing is enabled."""
+    if is_first_stage_enabled():
+        fallback_to_doubao(raw_text)
+    else:
+        print("[快速模式] 本地处理失败，未启动任何 AI 回退流程。")
 
 
 def publish_or_fallback(
@@ -189,11 +220,11 @@ def publish_or_fallback(
         )
     except (DeepSeekError, FeishuError) as exc:
         print(f"\n[失败] 发布失败: {exc}")
-        fallback_to_doubao(raw_text)
+        _fallback_after_processing_error(raw_text)
         return False
     except Exception as exc:
         print(f"\n[失败] 未预期错误: {exc}")
-        fallback_to_doubao(raw_text)
+        _fallback_after_processing_error(raw_text)
         return False
 
     if task_id:
@@ -229,11 +260,11 @@ def publish_or_fallback_result(
         )
     except (DeepSeekError, FeishuError) as exc:
         print(f"\n[失败] 发布失败: {exc}")
-        fallback_to_doubao(raw_text)
+        _fallback_after_processing_error(raw_text)
         return False, None
     except Exception as exc:
         print(f"\n[失败] 未预期错误: {exc}")
-        fallback_to_doubao(raw_text)
+        _fallback_after_processing_error(raw_text)
         return False, None
 
     if task_id:

@@ -162,6 +162,13 @@ def _ydl_opts_for_site(
             headers["Origin"] = referer
     opts["http_headers"] = headers
 
+    if site == "bilibili":
+        # Bilibili omits ``p=1`` for the first part.  yt-dlp otherwise treats
+        # that URL as an anthology playlist and downloads every part.  A task
+        # always represents one canonical part: no ``p`` means p1, while an
+        # explicit ``p=N`` must keep selecting that part.
+        opts["noplaylist"] = True
+
     if site == "youtube":
         node_runtime = _resolve_node_js_runtime()
         if node_runtime:
@@ -526,19 +533,84 @@ def load_asr_model():
         raise RuntimeError(f"{ASR_MODEL_NAME} 模型加载失败: {e}") from e
 
 
-def transcribe_offline(audio_path, model):
-    """离线转录函数"""
-    start_time = time.time()
-    print(f"📝 [转写] {ASR_MODEL_NAME} 处理中...")
+def _generate_with_vad_progress(model, audio_path, progress_callback=None):
+    """Run the existing FunASR pipeline and observe completed VAD batches.
 
-    try:
-        res = model.generate(
+    FunASR's public progress callback is local to each nested inference call when
+    a VAD model is enabled.  Observing those already-existing calls lets us
+    report whole-file speech duration without changing segmentation or batch
+    sizing, so inference throughput is unaffected.
+    """
+    if progress_callback is None or not getattr(model, "vad_model", None):
+        return model.generate(
             input=audio_path,
             cache={},
             language="中文",
             itn=True,
             batch_size=1,
         )
+
+    original_inference = model.inference
+    total_speech_ms = 0.0
+    processed_speech_ms = 0.0
+
+    def emit(stage):
+        try:
+            progress_callback(
+                {
+                    "stage": stage,
+                    "processed_speech_sec": processed_speech_ms / 1000.0,
+                    "total_speech_sec": total_speech_ms / 1000.0,
+                }
+            )
+        except Exception:
+            # Progress must never be allowed to interrupt model inference.
+            pass
+
+    def tracked_inference(*args, **kwargs):
+        nonlocal total_speech_ms, processed_speech_ms
+        target_model = kwargs.get("model")
+        result = original_inference(*args, **kwargs)
+
+        if target_model is model.vad_model:
+            total_speech_ms = sum(
+                max(0.0, float(end) - float(start))
+                for item in (result or [])
+                for start, end in (item.get("value") or [])
+            )
+            emit("vad_complete")
+        elif target_model is model.model and args:
+            batch_audio = args[0]
+            if not isinstance(batch_audio, (list, tuple)):
+                batch_audio = [batch_audio]
+            fs = 16000.0
+            frontend = getattr(model, "kwargs", {}).get("frontend")
+            fs = float(getattr(frontend, "fs", fs) or fs)
+            processed_speech_ms += sum(len(sample) / fs * 1000.0 for sample in batch_audio)
+            processed_speech_ms = min(processed_speech_ms, total_speech_ms or processed_speech_ms)
+            emit("asr_batch_complete")
+        return result
+
+    model.inference = tracked_inference
+    try:
+        return model.generate(
+            input=audio_path,
+            cache={},
+            language="中文",
+            itn=True,
+            batch_size=1,
+        )
+    finally:
+        model.inference = original_inference
+
+
+def transcribe_offline(audio_path, model, progress_callback=None):
+    """离线转录函数"""
+    start_time = time.time()
+    print(f"📝 [转写] {ASR_MODEL_NAME} 处理中...")
+
+    try:
+        res = _generate_with_vad_progress(model, audio_path, progress_callback)
 
         if res and len(res) > 0:
             text = res[0]["text"]

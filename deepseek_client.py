@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import time
+from typing import Any, Callable
+
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, OpenAI, RateLimitError
 
 import config
@@ -11,11 +14,12 @@ from prompts import (
     build_polish_user_message,
     render_polish_system,
 )
-from transcript_processing import remove_asr_punctuation
+from transcript_processing import format_transcript_locally, remove_asr_punctuation
 from server.settings_store import (
     get_deepseek_model,
     get_polish_prompt_template,
     get_transcript_correction_prompt,
+    is_first_stage_enabled,
     is_second_stage_enabled,
 )
 
@@ -62,46 +66,115 @@ def _wrap_api_error(exc: BaseException) -> DeepSeekError:
     return DeepSeekError(f"DeepSeek 调用失败：{exc}", cause=exc)
 
 
-def _completion(system_prompt: str, user_message: str, *, temperature: float = _TEMPERATURE) -> str:
-    """Run one non-streaming DeepSeek completion and return non-empty text."""
+def _completion(
+    system_prompt: str,
+    user_message: str,
+    *,
+    temperature: float = _TEMPERATURE,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> str:
+    """Run one DeepSeek completion, streaming only when progress is observed."""
+    request = {
+        "model": get_deepseek_model(),
+        "temperature": temperature,
+        "extra_body": {"thinking": {"type": "disabled"}},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+    }
     try:
-        response = _client().chat.completions.create(
-            model=get_deepseek_model(),
-            temperature=temperature,
-            extra_body={"thinking": {"type": "disabled"}},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-        )
+        if progress_callback is None:
+            response = _client().chat.completions.create(**request)
+        else:
+            response = _client().chat.completions.create(
+                **request,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
     except DeepSeekError:
         raise
     except Exception as exc:
         raise _wrap_api_error(exc) from exc
 
-    choice = response.choices[0] if response.choices else None
-    content = choice.message.content if choice and choice.message else None
+    if progress_callback is not None:
+        parts: list[str] = []
+        output_chars = 0
+        completion_tokens: int | None = None
+        started = time.monotonic()
+        last_emit = 0.0
+        try:
+            for chunk in response:
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    completion_tokens = getattr(usage, "completion_tokens", None)
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                piece = getattr(delta, "content", None) if delta else None
+                if not piece:
+                    continue
+                parts.append(piece)
+                output_chars += len(piece)
+                now = time.monotonic()
+                if now - last_emit >= 0.5:
+                    last_emit = now
+                    try:
+                        progress_callback(
+                            {
+                                "output_chars": output_chars,
+                                "elapsed_seconds": now - started,
+                                "done": False,
+                            }
+                        )
+                    except Exception:
+                        pass
+        except Exception as exc:
+            raise _wrap_api_error(exc) from exc
+        content = "".join(parts)
+        try:
+            progress_callback(
+                {
+                    "output_chars": output_chars,
+                    "completion_tokens": completion_tokens,
+                    "elapsed_seconds": time.monotonic() - started,
+                    "done": True,
+                }
+            )
+        except Exception:
+            pass
+    else:
+        choice = response.choices[0] if response.choices else None
+        content = choice.message.content if choice and choice.message else None
     if not content or not content.strip():
         raise DeepSeekError("DeepSeek 返回内容为空，请重试。")
     return content.strip()
 
 
-def correct_transcript(raw_text: str) -> str:
+def correct_transcript(raw_text: str, *, progress_callback=None) -> str:
     """Stage 1: strip ASR punctuation, then conservatively correct the transcript."""
     text = remove_asr_punctuation(raw_text).strip()
     if not text:
         raise DeepSeekError("转写文本为空，无法调用 DeepSeek。")
-    return _completion(get_transcript_correction_prompt(), text)
+    return _completion(
+        get_transcript_correction_prompt(),
+        text,
+        progress_callback=progress_callback,
+    )
 
 
-def organize_transcript(trusted_text: str) -> str:
+def organize_transcript(trusted_text: str, *, progress_callback=None) -> str:
     """Stage 2: build the summary, TOC, and chapter structure."""
     text = (trusted_text or "").strip()
     if not text:
         raise DeepSeekError("可信逐字稿为空，无法调用 DeepSeek。")
 
     system_prompt = render_polish_system(get_polish_prompt_template())
-    return _completion(system_prompt, build_polish_user_message(text))
+    return _completion(
+        system_prompt,
+        build_polish_user_message(text),
+        progress_callback=progress_callback,
+    )
 
 
 def process_transcript(
@@ -110,8 +183,18 @@ def process_transcript(
     input_is_trusted: bool = False,
 ) -> tuple[str, str]:
     """Run the strict two-stage flow; return trusted text and article Markdown."""
-    trusted_text = (raw_text or "").strip() if input_is_trusted else correct_transcript(raw_text)
-    article = organize_transcript(trusted_text) if is_second_stage_enabled() else trusted_text
+    first_stage_enabled = is_first_stage_enabled()
+    if input_is_trusted:
+        trusted_text = (raw_text or "").strip()
+    elif first_stage_enabled:
+        trusted_text = correct_transcript(raw_text)
+    else:
+        trusted_text = format_transcript_locally(raw_text)
+    article = (
+        organize_transcript(trusted_text)
+        if first_stage_enabled and is_second_stage_enabled()
+        else trusted_text
+    )
     return trusted_text, article
 
 

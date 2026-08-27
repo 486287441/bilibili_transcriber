@@ -149,7 +149,17 @@ class ProgressTracker:
             )
             if phase == snap.phase:
                 seen_current = True
-                if phase == "download":
+                explicit_eta = snap.detail.get("phase_eta_seconds")
+                explicit_phase = snap.detail.get("phase_eta_phase")
+                if explicit_phase == phase and explicit_eta is not None:
+                    updated_at = float(
+                        snap.detail.get("phase_eta_updated_elapsed_sec") or elapsed
+                    )
+                    phase_remaining = max(
+                        float(explicit_eta) - max(0.0, elapsed - updated_at),
+                        0.0,
+                    )
+                elif phase == "download":
                     downloaded = int(snap.detail.get("downloaded_bytes") or 0)
                     total = int(snap.detail.get("total_bytes") or 0)
                     speed = float(snap.detail.get("speed_bps") or 0)

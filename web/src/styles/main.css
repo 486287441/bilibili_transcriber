@@ -1950,7 +1950,8 @@ dialog.modal-backdrop-in::backdrop {
   background: var(--parchment);
 }
 
-.task-timing-overview > div {
+.task-timing-overview-metrics,
+.task-timing-primary-metric {
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -1961,11 +1962,29 @@ dialog.modal-backdrop-in::backdrop {
   font-size: 12px;
 }
 
-.task-timing-overview > div strong {
+.task-timing-primary-metric > strong {
   color: var(--brand);
   font-family: var(--mono);
   font-size: 23px;
   font-weight: 500;
+}
+
+.task-timing-context-metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.task-timing-context-metric strong {
+  color: var(--dark-warm);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .task-timing-overview p {

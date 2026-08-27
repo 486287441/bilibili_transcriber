@@ -45,6 +45,9 @@ export function useSmoothPhaseProgress(progressRef) {
       return
     }
     const now = performance.now()
+    const measuredSource = ['funasr_vad_batches', 'deepseek_stream'].includes(
+      p?.detail?.progress_source,
+    )
     PHASES.forEach((ph, i) => {
       const v = phaseTargetFromProgress(p, ph)
       const s = barState[i]
@@ -55,6 +58,7 @@ export function useSmoothPhaseProgress(progressRef) {
           s.velocity = s.velocity * 0.4 + measured * 0.6
         }
       }
+      if (measuredSource) s.velocity = 0
       s.lastTarget = v
       s.lastTargetAt = now
       targets[ph] = v
@@ -95,7 +99,7 @@ export function useSmoothPhaseProgress(progressRef) {
   return { download, transcribe, polish }
 }
 
-/** ETA display with monotonic smoothing (decrease freely, increase capped at +5s). */
+/** Display the newest backend ETA; live throughput corrections may move either way. */
 export function useSmoothEta(progressRef) {
   const displayEta = ref(0)
 
@@ -107,12 +111,7 @@ export function useSmoothEta(progressRef) {
         return
       }
       const next = Math.max(0, Math.round(raw))
-      const prev = displayEta.value
-      if (prev === 0 || next <= prev) {
-        displayEta.value = next
-      } else {
-        displayEta.value = Math.min(next, prev + 5)
-      }
+      displayEta.value = next
     },
   )
 
@@ -205,16 +204,11 @@ export function useModelLoadProgress(statusRef) {
 
 export function formatEta(seconds, phase) {
   const s = Math.max(0, Math.round(seconds || 0))
-  if (phase === 'transcribe') {
-    const lowMin = Math.max(1, Math.floor((s * 0.75) / 60))
-    const highMin = Math.max(lowMin, Math.ceil((s * 1.5) / 60))
-    if (highMin <= 1) return '预计还需约 1 分钟'
-    if (lowMin === highMin) return `预计还需约 ${lowMin} 分钟`
-    return `预计还需约 ${lowMin}~${highMin} 分钟`
-  }
   const m = Math.floor(s / 60)
   const r = s % 60
-  return `预计剩余 ${m} 分 ${r} 秒`
+  if (s <= 1) return '即将完成'
+  if (m <= 0) return `预计剩余约 ${r} 秒`
+  return `预计剩余约 ${m} 分 ${r} 秒`
 }
 
 export const PHASE_LABELS = {
@@ -234,8 +228,7 @@ export const STATUS_LABELS = {
 }
 
 export const TRANSCRIPTION_ROUTE_OPTIONS = [
-  { value: 'auto', label: '官方字幕优先' },
-  { value: 'subtitle', label: 'B站字幕' },
+  { value: 'auto', label: '自动选择' },
   { value: 'ocr', label: '画面 OCR' },
   { value: 'asr', label: '语音识别' },
 ]
@@ -262,17 +255,16 @@ export function effectiveTranscriptionRoute(item) {
 export function transcriptionRouteLabel(item) {
   const route = effectiveTranscriptionRoute(item)
   if (item?.requested_route === 'auto') {
-    return route ? `字幕优先 · ${TRANSCRIPTION_ROUTE_LABELS[route] || route}` : '正在检测字幕'
+    return route ? `自动 · ${TRANSCRIPTION_ROUTE_LABELS[route] || route}` : '正在选择路线'
   }
-  return TRANSCRIPTION_ROUTE_LABELS[route] || TRANSCRIPTION_ROUTE_LABELS[item?.requested_route] || '正在检测字幕'
+  return TRANSCRIPTION_ROUTE_LABELS[route] || TRANSCRIPTION_ROUTE_LABELS[item?.requested_route] || '正在选择路线'
 }
 
 export function transcriptionPhaseLabel(item) {
   const route = effectiveTranscriptionRoute(item)
-  if (route === 'subtitle') return '字幕提取'
   if (route === 'ocr') return '画面 OCR'
   if (route === 'asr') return '语音转写'
-  return '字幕检测'
+  return '文字提取'
 }
 
 const SITE_HINTS = [

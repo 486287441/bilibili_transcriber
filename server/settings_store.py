@@ -60,6 +60,7 @@ class AppSettings(BaseModel):
         pattern="^(deepseek-v4-pro|deepseek-v4-flash)$",
     )
     auto_fallback_route: str = Field(default="asr", pattern="^(ocr|asr)$")
+    first_stage_enabled: bool = True
     second_stage_enabled: bool = True
     transcript_correction_prompt: str = Field(
         default_factory=_default_transcript_correction_prompt,
@@ -158,6 +159,10 @@ def get_auto_fallback_route() -> str:
 
 def is_second_stage_enabled() -> bool:
     return load_settings().second_stage_enabled
+
+
+def is_first_stage_enabled() -> bool:
+    return load_settings().first_stage_enabled
 
 
 def get_transcript_correction_prompt() -> str:

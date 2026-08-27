@@ -78,6 +78,25 @@ async def read_activity_log(
     from server.user_activity_log import recent
 
     items = recent(limit=limit)
+    # Older completion events predate the embedded video-duration field. Fill
+    # it from durable history so the timing dialog is consistent for old and
+    # new tasks without rewriting the user's activity log.
+    timing_items = [item for item in items if isinstance(item.get("timing"), dict)]
+    if any(not item["timing"].get("video_duration_seconds") for item in timing_items):
+        from server import history_db
+
+        for item in timing_items:
+            timing = item["timing"]
+            if timing.get("video_duration_seconds"):
+                continue
+            task_id = str(item.get("task_id") or "").strip()
+            row = history_db.get_history_by_task_id(task_id) if task_id else None
+            duration_sec = getattr(row, "duration_sec", None)
+            if duration_sec and duration_sec > 0:
+                item["timing"] = {
+                    **timing,
+                    "video_duration_seconds": round(float(duration_sec), 2),
+                }
     if model_manager.is_loading():
         from server.queue_service import queue_service
 

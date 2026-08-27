@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS progress_stats (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
     duration_sec REAL,
-    subtitle_sec REAL NOT NULL DEFAULT 0,
     download_sec REAL,
     model_load_sec REAL NOT NULL DEFAULT 0,
     transcribe_sec REAL,
@@ -67,10 +66,6 @@ def _migrate_progress_columns(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(progress_stats)")}
     if "polish_chars" not in cols:
         conn.execute("ALTER TABLE progress_stats ADD COLUMN polish_chars INTEGER")
-    if "subtitle_sec" not in cols:
-        conn.execute(
-            "ALTER TABLE progress_stats ADD COLUMN subtitle_sec REAL NOT NULL DEFAULT 0"
-        )
     if "model_load_sec" not in cols:
         conn.execute(
             "ALTER TABLE progress_stats ADD COLUMN model_load_sec REAL NOT NULL DEFAULT 0"
@@ -94,7 +89,6 @@ def record_stats(
     polish_sec: float,
     polish_tokens: int | None = None,
     polish_chars: int | None = None,
-    subtitle_sec: float = 0.0,
     model_load_sec: float = 0.0,
 ) -> None:
     with _connect() as conn:
@@ -102,16 +96,15 @@ def record_stats(
         conn.execute(
             """
             INSERT INTO progress_stats (
-                id, task_id, duration_sec, subtitle_sec, download_sec,
+                id, task_id, duration_sec, download_sec,
                 model_load_sec, transcribe_sec, polish_sec, polish_tokens,
                 polish_chars, recorded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(uuid.uuid4()),
                 task_id,
                 duration_sec,
-                subtitle_sec,
                 download_sec,
                 model_load_sec,
                 transcribe_sec,
@@ -131,7 +124,7 @@ def get_task_stats(task_id: str) -> dict[str, Any] | None:
         conn.commit()
         row = conn.execute(
             """
-            SELECT duration_sec, subtitle_sec, download_sec, model_load_sec,
+            SELECT duration_sec, download_sec, model_load_sec,
                    transcribe_sec, polish_sec, polish_tokens, polish_chars, recorded_at
             FROM progress_stats
             WHERE task_id = ?

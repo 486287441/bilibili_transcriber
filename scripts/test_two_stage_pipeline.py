@@ -31,12 +31,13 @@ sys.modules.setdefault(
         get_deepseek_model=lambda: "test-model",
         get_polish_prompt_template=lambda: "第二阶段内容整理",
         get_transcript_correction_prompt=lambda: "第一阶段测试 Prompt",
+        is_first_stage_enabled=lambda: True,
         is_second_stage_enabled=lambda: True,
     ),
 )
 from deepseek_client import process_transcript, stream_chat_about_article
 from prompts import TRANSCRIPT_CORRECTION_SYSTEM, render_polish_system
-from transcript_processing import remove_asr_punctuation
+from transcript_processing import format_transcript_locally, remove_asr_punctuation
 
 
 def test_first_stage_prompt_contract() -> None:
@@ -92,6 +93,15 @@ def test_two_separate_deepseek_calls() -> None:
     )
 
 
+def test_local_formatter_preserves_asr_punctuation_and_words() -> None:
+    source = "第一句，有标点。第二句也有！第三句？"
+    formatted = format_transcript_locally(source, target_paragraph_chars=8)
+    assert formatted == "第一句，有标点。\n\n第二句也有！\n\n第三句？"
+    assert formatted.replace("\n", "") == source
+    assert format_transcript_locally("中文第一行\n中文第二行") == "中文第一行中文第二行"
+    assert format_transcript_locally("OpenAI API\nresponse") == "OpenAI API response"
+
+
 def test_second_stage_can_be_disabled() -> None:
     calls: list[dict] = []
 
@@ -112,6 +122,21 @@ def test_second_stage_can_be_disabled() -> None:
     assert trusted == "第一阶段：可直接发布的完整转写稿。"
     assert article == trusted
     assert len(calls) == 1
+
+
+def test_first_stage_disabled_uses_local_format_and_skips_all_deepseek() -> None:
+    with (
+        patch("deepseek_client.is_first_stage_enabled", return_value=False),
+        patch("deepseek_client.is_second_stage_enabled", return_value=True),
+        patch("deepseek_client.correct_transcript") as correct,
+        patch("deepseek_client.organize_transcript") as organize,
+    ):
+        trusted, article = process_transcript("第一句，有标点。第二句也有！")
+
+    assert trusted == "第一句，有标点。第二句也有！"
+    assert article == trusted
+    correct.assert_not_called()
+    organize.assert_not_called()
 
 
 def test_followup_explicitly_disables_thinking() -> None:
@@ -152,8 +177,10 @@ def test_persisted_legacy_second_stage_prompt_is_upgraded() -> None:
 if __name__ == "__main__":
     test_first_stage_prompt_contract()
     test_remove_only_natural_language_punctuation()
+    test_local_formatter_preserves_asr_punctuation_and_words()
     test_two_separate_deepseek_calls()
     test_second_stage_can_be_disabled()
+    test_first_stage_disabled_uses_local_format_and_skips_all_deepseek()
     test_followup_explicitly_disables_thinking()
     test_persisted_legacy_second_stage_prompt_is_upgraded()
     print("two-stage pipeline tests PASS")

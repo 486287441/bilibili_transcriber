@@ -121,7 +121,6 @@ def test_publish_failure_is_isolated_and_recorded_after_retries() -> None:
 def test_completion_timing_keeps_slow_phases_separate() -> None:
     original = progress_db.get_task_stats
     progress_db.get_task_stats = lambda _task_id: {
-        "subtitle_sec": 7.0,
         "download_sec": 2.55,
         "model_load_sec": 50.9,
         "transcribe_sec": 90.75,
@@ -129,7 +128,8 @@ def test_completion_timing_keeps_slow_phases_separate() -> None:
     }
     timing_row = SimpleNamespace(
         task_id="task-timing",
-        processing_duration_sec=556.23,
+        duration_sec=1832.4,
+        processing_duration_sec=549.23,
         resolved_route="asr",
     )
     try:
@@ -138,7 +138,6 @@ def test_completion_timing_keeps_slow_phases_separate() -> None:
         progress_db.get_task_stats = original
 
     assert [phase["label"] for phase in timing["phases"]] == [
-        "B 站字幕检查",
         "媒体下载",
         "语音识别模型加载",
         "语音转写",
@@ -146,7 +145,8 @@ def test_completion_timing_keeps_slow_phases_separate() -> None:
         "飞书发布",
     ]
     assert timing["slowest_key"] == "polish"
-    assert timing["total_seconds"] == 563.0
+    assert timing["total_seconds"] == 556.0
+    assert timing["video_duration_seconds"] == 1832.4
 
 
 if __name__ == "__main__":

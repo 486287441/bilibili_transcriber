@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api")
 
 class QueueAddBody(BaseModel):
     url: str = Field(min_length=1)
-    requested_route: Literal["auto", "subtitle", "ocr", "asr"] = "auto"
+    requested_route: Literal["auto", "ocr", "asr"] = "auto"
 
 
 class QueueReorderBody(BaseModel):

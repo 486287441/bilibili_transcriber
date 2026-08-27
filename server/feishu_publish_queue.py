@@ -40,14 +40,11 @@ class FeishuPublishQueue:
         from server.progress_db import get_task_stats
 
         stats = get_task_stats(row.task_id) or {}
-        subtitle_sec = max(0.0, float(stats.get("subtitle_sec") or 0.0))
         download_sec = max(0.0, float(stats.get("download_sec") or 0.0))
         model_load_sec = max(0.0, float(stats.get("model_load_sec") or 0.0))
         transcribe_sec = max(0.0, float(stats.get("transcribe_sec") or 0.0))
         polish_sec = max(0.0, float(stats.get("polish_sec") or 0.0))
-        measured_local = (
-            subtitle_sec + download_sec + model_load_sec + transcribe_sec + polish_sec
-        )
+        measured_local = download_sec + model_load_sec + transcribe_sec + polish_sec
         local_sec = max(
             measured_local,
             float(getattr(row, "processing_duration_sec", None) or 0.0),
@@ -56,15 +53,10 @@ class FeishuPublishQueue:
 
         route = getattr(row, "resolved_route", None) or "asr"
         text_phase_label = {
-            "subtitle": "字幕获取",
             "ocr": "画面字幕识别",
             "asr": "语音转写",
         }.get(route, "文字获取与转写")
         phases = []
-        if subtitle_sec >= 0.05:
-            phases.append(
-                {"key": "subtitle", "label": "B 站字幕检查", "seconds": subtitle_sec}
-            )
         phases.append(
             {"key": "download", "label": "媒体下载", "seconds": download_sec}
         )
@@ -91,8 +83,16 @@ class FeishuPublishQueue:
         )
         total_sec = local_sec + max(0.0, publish_sec)
         slowest = max(phases, key=lambda phase: phase["seconds"], default=None)
+        try:
+            video_duration_sec = max(
+                0.0,
+                float(getattr(row, "duration_sec", None) or 0.0),
+            )
+        except (TypeError, ValueError):
+            video_duration_sec = 0.0
         return {
             "total_seconds": round(total_sec, 2),
+            "video_duration_seconds": round(video_duration_sec, 2) or None,
             "local_seconds": round(local_sec, 2),
             "publish_seconds": round(max(0.0, publish_sec), 2),
             "slowest_key": slowest["key"] if slowest else None,
