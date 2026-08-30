@@ -1,0 +1,19 @@
+{
+  "scanned_at": "2026-08-18",
+  "framework": "Vue 3.5 + Vite 6",
+  "font_stack": "TsangerJinKai02 with existing serif, mono, and PingFang UI fallbacks",
+  "palette": "Existing parchment, ivory, ink-blue, success, and error CSS custom properties",
+  "motion": "GSAP installed; history component remains motion-cut",
+  "spacing": "Existing 4–8px-derived spacing rhythm",
+  "preserve": [
+    "font stack",
+    "palette",
+    "spacing scale",
+    "existing Vue component boundaries"
+  ],
+  "sources": [
+    "web/package.json",
+    "web/src/styles/main.css",
+    "web/src/components/HistoryPanel.vue"
+  ]
+}

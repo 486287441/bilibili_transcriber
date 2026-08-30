@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HistoryPanel — 8 states</title>
+    <link rel="stylesheet" href="../styles/main.css" />
+    <style>
+      .preview-shell {
+        width: min(72rem, 100%);
+        margin-inline: auto;
+        padding: 2rem 1rem 4rem;
+      }
+
+      .preview-shell h1 {
+        margin: 0 0 1.5rem;
+        color: var(--near-black);
+        font-size: 1.25rem;
+        font-style: normal;
+        font-weight: 500;
+      }
+
+      .preview-state {
+        margin-bottom: 1.5rem;
+      }
+
+      .preview-state > h2 {
+        margin: 0 0 0.5rem;
+        color: var(--stone);
+        font-family: var(--latin-ui);
+        font-size: 0.75rem;
+        font-style: normal;
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="preview-shell history-panel">
+      <h1>HistoryPanel — 8 states</h1>
+      <div id="preview"></div>
+    </main>
+    <script>
+      const states = [
+        ['default', '处理中', '自动 · 字幕下载'],
+        ['hover', '已完成', '字幕下载'],
+        ['focus', '已完成', '画面 OCR'],
+        ['active', '已完成', '语音识别'],
+        ['disabled', '已完成', '字幕下载'],
+        ['loading', '处理中', '自动判断'],
+        ['error', '失败', '字幕下载'],
+        ['success', '已完成', '字幕下载'],
+      ]
+
+      document.querySelector('#preview').innerHTML = states.map(([state, status, route]) => `
+        <section class="preview-state">
+          <h2>${state}</h2>
+          <article
+            class="history-entry is-${state}"
+            data-state="${state}"
+            ${state === 'disabled' ? 'aria-disabled="true"' : ''}
+          >
+            <div class="history-entry-main">
+              <a class="history-entry-title" href="#">移动终于坐不住了，这段标题用于检查两行收束</a>
+              <a class="history-entry-url" href="#">https://www.bilibili.com/video/BV1example</a>
+              <div class="history-entry-meta"><time>2026/8/18 20:02:25</time></div>
+            </div>
+            <div class="history-entry-result">
+              <div class="history-state-line">
+                <span class="history-status"><span class="history-status-dot"></span>${status}</span>
+                <span class="route-badge">${route}</span>
+              </div>
+            </div>
+            <div class="history-entry-actions">
+              <div class="history-primary-actions">
+                <button class="history-action history-action-primary ${state === 'focus' ? 'is-focus' : ''} ${state === 'active' ? 'is-active' : ''}" ${state === 'disabled' ? 'disabled' : ''}>查看结果</button>
+                <button class="history-action ghost" ${state === 'disabled' ? 'disabled' : ''}>追问</button>
+                <button class="history-action history-delete" ${state === 'disabled' ? 'disabled' : ''}>删除</button>
+              </div>
+            </div>
+          </article>
+        </section>
+      `).join('')
+    </script>
+  </body>
+</html>

@@ -1,0 +1,48 @@
+---
+description: 代码改动完成后自动构建前端并重启本地服务
+alwaysApply: true
+---
+
+# 改动完成后的部署流程
+
+在本项目中完成用户请求的代码改动后，**必须**在收尾阶段执行以下三步（无需用户再次提醒）：
+
+## 1. 构建前端
+
+```powershell
+cd D:\code\bilibili_transcriber\web; npm run build
+```
+
+仅改后端 Python、且确认不涉及 `web/` 时，可跳过此步并在回复中说明原因。
+
+## 2. 停止当前服务
+
+优先释放 8765 端口（避免 `stop.bat` 在部分终端编码下失败）：
+
+```powershell
+$listeners = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+if ($listeners) {
+  $listeners | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
+    Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
+  }
+}
+```
+
+## 3. 重启服务
+
+在后台启动（工作目录为项目根目录）：
+
+```powershell
+D:\code\bilibili_transcriber\.venv\Scripts\python.exe -m server
+```
+
+启动后确认日志出现 `Uvicorn running on http://127.0.0.1:8765`，并可选请求 `/api/health`。
+
+## 回复用户时
+
+简要说明：已构建、已重启，控制面板地址为 http://127.0.0.1:8765/ 。
+
+## 例外
+
+- 用户明确说「只改代码不要重启」或「不要构建」时，跳过对应步骤。
+- 纯问答、代码审查、无文件修改的对话，不执行此流程。
